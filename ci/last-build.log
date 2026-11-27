@@ -1,5 +1,3 @@
-Downloading https://services.gradle.org/distributions/gradle-8.1.1-bin.zip
-...........10%............20%............30%............40%............50%............60%............70%............80%...........90%............100%
 
 Welcome to Gradle 8.1.1!
 
@@ -21,31 +19,6 @@ MixinGradle did not locate the diffplug APT plugin, skipping eclipse task config
 > Task :createMcpToSrg
 
 > Task :compileJava
-Setting up MCP environment
-Initializing steps
-Executing steps
- > Running 'downloadManifest'
- > Running 'downloadJson'
- > Running 'downloadClient'
- > Running 'downloadServer'
- > Running 'extractServer'
- > Running 'downloadClientMappings'
- > Running 'mergeMappings'
- > Running 'stripClient'
- > Running 'stripServer'
- > Running 'merge'
- > Running 'listLibraries'
- > Running 'rename'
-Stopping at requested step: /home/runner/.gradle/caches/forge_gradle/mcp_repo/de/oceanlabs/mcp/mcp_config/1.20.1-20230612.114412/joined/rename/output.jar
-[01:52:23] [main/INFO]: Writing debug log file accesstransform.log
-[01:52:23] [main/INFO]: Access Transformer processor running version 8.2.14
-[01:52:23] [main/INFO]: Command line arguments [--inJar, /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-injected.jar, --outJar, /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0_mapped_official_1.20.1/forge-1.20.1-47.3.0_mapped_official_1.20.1.jar, --logFile, accesstransform.log, --atFile, /home/runner/work/structure-harmony/structure-harmony/build/_atJar_4/parent_at.cfg]
-[01:52:23] [main/INFO]: Reading from /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-injected.jar
-[01:52:23] [main/INFO]: Writing to /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0_mapped_official_1.20.1/forge-1.20.1-47.3.0_mapped_official_1.20.1.jar
-[01:52:23] [main/INFO]: Transformer file /home/runner/work/structure-harmony/structure-harmony/build/_atJar_4/parent_at.cfg
-[01:52:23] [main/WARN]: Found existing output jar /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0_mapped_official_1.20.1/forge-1.20.1-47.3.0_mapped_official_1.20.1.jar, overwriting
-[01:52:25] [main/INFO]: JAR transformation complete /home/runner/.gradle/caches/forge_gradle/minecraft_user_repo/net/minecraftforge/forge/1.20.1-47.3.0_mapped_official_1.20.1/forge-1.20.1-47.3.0_mapped_official_1.20.1.jar
-Creating SRG -> MCP TSRG
 Note: SpongePowered MIXIN Annotation Processor Version=0.8.5 (MixinGradle Version=0.7.38)
 Note: Supported obfuscation types: ObfuscationServiceMCP supports [notch] ObfuscationServiceFG3 supports [searge]
 Note: Loading searge mappings from /home/runner/work/structure-harmony/structure-harmony/build/createMcpToSrg/output.tsrg
@@ -80,5 +53,5 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 See https://docs.gradle.org/8.1.1/userguide/command_line_interface.html#sec:command_line_warnings
 
-BUILD SUCCESSFUL in 1m 11s
+BUILD SUCCESSFUL in 20s
 11 actionable tasks: 11 executed
