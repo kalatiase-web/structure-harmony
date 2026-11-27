@@ -22,6 +22,14 @@ public final class SHStats {
 
     public record Rejection(String structure, String yieldedTo, int chunkX, int chunkZ, double distance, double required) {}
 
+    private static volatile boolean spacingHookLive = false;
+    private static volatile boolean blendHookLive = false;
+
+    public static void markSpacingHookLive() { spacingHookLive = true; }
+    public static void markBlendHookLive() { blendHookLive = true; }
+    public static boolean isSpacingHookLive() { return spacingHookLive; }
+    public static boolean isBlendHookLive() { return blendHookLive; }
+
     private static final Map<String, Entry> ENTRIES = new ConcurrentHashMap<>();
     private static final Deque<Rejection> HISTORY = new ArrayDeque<>();
 
@@ -63,6 +71,8 @@ public final class SHStats {
 
     public static void reset() {
         ENTRIES.clear();
+        spacingHookLive = false;
+        blendHookLive = false;
         synchronized (HISTORY) { HISTORY.clear(); }
     }
 

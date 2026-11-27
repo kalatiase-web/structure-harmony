@@ -61,6 +61,11 @@ public final class SHCommand {
 
     /** Proof that structures are still generating, and how much they are losing. */
     private static int report(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal(String.format(
+                "hooks: spacing %s, blending %s",
+                SHStats.isSpacingHookLive() ? "active" : "not seen yet",
+                SHStats.isBlendHookLive() ? "active" : "not seen yet")), false);
+
         Map<String, SHStats.Entry> snapshot = SHStats.snapshot();
         if (snapshot.isEmpty()) {
             source.sendSuccess(() -> Component.literal(

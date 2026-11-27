@@ -22,7 +22,7 @@ public abstract class ChunkGeneratorMixin {
      * thread-local so the filter in StructureManagerMixin, which runs synchronously inside this
      * call, can see them.
      */
-    @Inject(method = "createStructures", at = @At("HEAD"))
+    @Inject(method = "createStructures", at = @At("HEAD"), require = 1)
     private void structureharmony$pushContext(RegistryAccess registries, ChunkGeneratorStructureState state,
                                               StructureManager structureManager, ChunkAccess chunk,
                                               StructureTemplateManager templates, CallbackInfo ci) {
@@ -30,7 +30,7 @@ public abstract class ChunkGeneratorMixin {
         SHContext.set(new SHContext.Ctx(registries, state, self.getBiomeSource(), self));
     }
 
-    @Inject(method = "createStructures", at = @At("RETURN"))
+    @Inject(method = "createStructures", at = @At("RETURN"), require = 1)
     private void structureharmony$popContext(RegistryAccess registries, ChunkGeneratorStructureState state,
                                              StructureManager structureManager, ChunkAccess chunk,
                                              StructureTemplateManager templates, CallbackInfo ci) {
@@ -41,9 +41,10 @@ public abstract class ChunkGeneratorMixin {
      * Terrain blending. HEAD is before any structure piece or feature lands in this chunk, and
      * after the chunk's own terrain and surface are final - exactly the window we want.
      */
-    @Inject(method = "applyBiomeDecoration", at = @At("HEAD"))
+    @Inject(method = "applyBiomeDecoration", at = @At("HEAD"), require = 1)
     private void structureharmony$blendTerrain(WorldGenLevel level, ChunkAccess chunk,
                                                StructureManager structureManager, CallbackInfo ci) {
+        com.structureharmony.SHStats.markBlendHookLive();
         try {
             TerrainSmoother.blendChunk((ChunkGenerator) (Object) this, level, chunk, structureManager);
         } catch (Throwable t) {

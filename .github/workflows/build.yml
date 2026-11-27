@@ -70,6 +70,41 @@ jobs:
           git commit -m "ci: build log for run ${{ github.run_number }} [skip ci]" || exit 0
           git push || true
 
+      # Boots a real Forge server and generates spawn chunks. This is what catches a mixin
+      # that compiles but never applies - the failure mode where the mod loads and silently
+      # does nothing. require = 1 turns that into a hard startup error, and this step reads it.
+      - name: Smoke test - boot server and generate a world
+        if: steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          mkdir -p run
+          echo "eula=true" > run/eula.txt
+          {
+            echo "online-mode=false"
+            echo "level-seed=314159"
+            echo "max-tick-time=-1"
+            echo "sync-chunk-writes=false"
+          } > run/server.properties
+
+          timeout 600 ./gradlew runServer --no-daemon --console=plain 2>&1 | tee server.log || true
+
+          echo "::group::server log tail"
+          tail -n 60 server.log
+          echo "::endgroup::"
+
+          if grep -qiE "Mixin apply failed|InvalidInjectionException|Critical injection failure|Mixin transformation of .* failed|was not found in" server.log; then
+            echo "::error::Mixin failed to apply - see the log above"
+            grep -niE "Mixin apply failed|InvalidInjectionException|Critical injection failure|Mixin transformation of .* failed|was not found in" server.log | head -20
+            exit 1
+          fi
+
+          if ! grep -q 'Done (' server.log; then
+            echo "::error::Server never finished starting, so world generation was not exercised"
+            exit 1
+          fi
+
+          echo "Server booted and generated spawn chunks with both mixins applied."
+
       - name: Upload jar
         if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
