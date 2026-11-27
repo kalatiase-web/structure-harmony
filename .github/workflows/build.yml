@@ -77,8 +77,9 @@ jobs:
         if: steps.build.outcome == 'success'
         shell: bash
         run: |
-          mkdir -p run
+          mkdir -p run/config
           echo "eula=true" > run/eula.txt
+          printf '[debug]\n\tlogMoves = true\n' > run/config/structureharmony-common.toml
           {
             echo "online-mode=false"
             echo "level-seed=314159"
@@ -95,6 +96,16 @@ jobs:
           if grep -qiE "Mixin apply failed|InvalidInjectionException|Critical injection failure|Mixin transformation of .* failed|was not found in" server.log; then
             echo "::error::Mixin failed to apply - see the log above"
             grep -niE "Mixin apply failed|InvalidInjectionException|Critical injection failure|Mixin transformation of .* failed|was not found in" server.log | head -20
+            exit 1
+          fi
+
+          echo "::group::Structure Harmony output"
+          grep -F "[StructureHarmony]" server.log | head -40 || echo "(no moves logged for this seed)"
+          echo "::endgroup::"
+
+          if grep -qF "overlap resolution failed" server.log; then
+            echo "::error::The resolver threw at runtime"
+            grep -A 25 -F "overlap resolution failed" server.log | head -40
             exit 1
           fi
 

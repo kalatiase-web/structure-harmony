@@ -1,33 +1,126 @@
 # Structure Harmony — Forge 1.20.1
 
+Stops structures from different mods (and vanilla) generating on top of each other. When two
+collide, the higher priority one stays where it is and the lower priority one is **moved aside**
+until they are at least 100 blocks apart. Structures are never deleted to resolve a conflict.
+
 **[Download the latest jar](https://github.com/kalatiase-web/structure-harmony/releases/latest)** — drop it in `mods/`. Config is written to `config/structureharmony-common.toml` on first launch.
-
-Two features, no overlap with each other:
-
-1. **Spacing** — stops structures from different mods (and vanilla) generating on top of or right next to each other.
-2. **Terrain blending** — reshapes the ground around a structure so it meets the build, instead of floating over a slope or being swallowed by a mountainside. Terrain smoothing only: no support pillars, no walls extended down.
-
-Built with Mixins because Forge 1.20.1 has no event for structure placement.
 
 ---
 
-## Why this one actually spaces things out, and still spawns your structures
+## Why "move it" and not "block it"
 
-Those two complaints come from the same design mistake. Most spacing mods work by raising every structure's `spacing`/`separation` in its placement config, which does two bad things at once: it thins out *all* structures globally (your 1-in-200-chunks tower now appears once a region), and it still does nothing about overlap, because spacing is per-structure — a village and a modded tower have completely independent grids and happily land on the same chunk.
+Every spacing mod I know of, including the first version of this one, resolves a collision by
+cancelling the loser. That cannot be tuned into something acceptable, and here is why:
 
-This mod does neither. It hooks `StructureManager#setStartForStructure`, the single point every structure passes through, and rejects **one candidate position** when it collides with something that outranks it. The structure keeps every other cell of its own placement grid, so its overall density is barely touched. Nothing is ever disabled, excluded from a biome, or removed from a structure set.
+Vanilla gives each structure **exactly one candidate chunk per spacing cell**. For villages the
+cell is 34×34 chunks. Cancel that candidate and the structure does not slide over to a nearby
+chunk — the next chance is a whole spacing period away, so it is gone from the *entire region*.
+Now multiply that by ~40 vanilla structure sets plus whatever a modpack adds: something
+higher-priority is in range most of the time, so cancellations stack up and structures start
+disappearing. That is the "it stopped my structures generating" failure, and it is a design
+flaw, not a tuning problem.
 
-On top of that:
+So this version does not cancel. It translates the structure's pieces. `StructurePiece#move` is
+an operation vanilla performs on itself — `JigsawPlacement` shifts whole piece trees, and
+`PoolElementStructurePiece` overrides `move` to carry the jigsaw position and junctions along —
+so villages, outposts and most modded structures translate intact rather than coming apart.
 
-| Problem in other mods | What this does |
+The move happens during `STRUCTURE_STARTS`, which is before `NOISE`. That ordering is free
+value: `Beardifier` reads structure starts during noise generation, so any structure declaring
+terrain adaptation gets **vanilla's own** terrain shaping applied at its new position.
+
+## How a collision is resolved
+
+1. Find every higher-priority structure candidate within the required distance, computed
+   analytically from each structure's own `StructurePlacement` plus the world seed — not from
+   "what happens to be generated already", so the result does not depend on which direction you
+   walked.
+2. Work out the direction straight away from the conflict, then try evenly spaced directions
+   outward from it, smallest move first.
+3. Accept the first move that clears every conflict, keeps the structure inside its own biome
+   list, and needs no absurd vertical correction.
+4. Apply a vertical correction from the ground-height difference between the old and new spot,
+   so a structure moved sideways still meets the ground.
+5. If nothing clears it, apply the best partial improvement and **generate the structure
+   anyway**, counted as `unresolved`.
+
+Priority ties are broken by a seed-derived hash, so the outcome is stable per world but not
+biased toward whichever mod id sorts first.
+
+---
+
+## The one hard limit, stated plainly
+
+`ChunkGenerator#createReferences` only looks **8 chunks** around a chunk when deciding which
+structures that chunk has to place. A structure whose bounding box ends up further than that
+from the chunk that owns it is never placed by the outer chunks — it generates cut in half.
+
+So the ceiling on displacement is about 112 blocks minus the structure's own radius:
+
+| Structure size | Roughly how far it can move |
 |---|---|
-| Structures lost to "phantom" neighbours that would never have generated there | `checkBiomes` only yields to a neighbour whose biome list matches the biome at that spot |
-| Results depend on which direction the player walked | Neighbour positions are computed **analytically** from each structure's own `StructurePlacement` + world seed, never from "what happens to be generated already". Same seed, same world, every time |
-| Two structures both yield to each other and neither spawns | Resolution uses a **total order** (priority → seed-mixed hash → id). Exactly one side yields, always |
-| A structure gets quietly starved to zero | Fail-open valve: once a structure has lost more than `failOpenRatio` of its candidates, it stops being rejected at all |
-| No way to tell whether it's working | `/structureharmony report` and `/structureharmony why <id>` show attempts, placements, rejections and the exact chunk coords |
-| Vanilla wins every fight | `preferModdedOverVanilla = true` by default: vanilla structures yield to modded ones |
-| Progression-critical structures get moved | Strongholds, buried treasure (must match the map!), fortresses and end cities are exempt by default |
+| Small (fits in a chunk or two) | ~96 blocks — the full target is reachable |
+| Medium (outpost, small ruin) | ~60–80 blocks |
+| Large (village, mansion, monument) | ~16–32 blocks, sometimes nothing |
+
+There is no way around this; the chunks beyond that radius are not even loaded at that
+generation stage. What it means in practice: two small structures get properly separated, a
+small structure next to a village gets pushed clear, but **two large structures on top of each
+other mostly cannot be fixed** — they will be reported as `unresolved` and both will generate.
+Raising `maxShift` past 112 does nothing.
+
+If you would rather lose a structure than have an unresolved overlap, set
+`cancelWhenCannotMove = true`. It is off by default on purpose.
+
+---
+
+## Config — `config/structureharmony-common.toml`
+
+All distances are in **blocks**. Selector syntax, most specific wins:
+
+```
+"minecraft:village_plains=140"   exact structure
+"@yourmod=120"                   every structure from a mod
+"#yourmod:big_stuff=160"         every structure in a structure tag
+"*=100"                          fallback
+```
+
+Key settings:
+
+- `minSeparation = 100` — minimum centre-to-centre distance between two different structures.
+- `radiusOverrides` — per-structure room requirement; required distance is
+  `max(minSeparation, radiusA + radiusB) + extraBuffer`.
+- `priorityOverrides` — higher stays put, lower moves. Vanilla gets −10 while
+  `preferModdedOverVanilla` is on, so **your structures hold their ground and vanilla moves**.
+- `pairOverrides` — `"a|b=blocks"` for one pair; `=0` lets a pair sit together (villages and
+  outposts ship like this, since vanilla intends them to be close).
+- `maxShift = 96` — displacement budget, capped by the engine limit above.
+- `followTerrainHeight = true` / `maxVerticalShift = 24` — vertical correction after a sideways move.
+- `keepBiome = true` — never nudge a structure into a biome its own biome list rejects.
+- `cancelWhenCannotMove = false` — leave this off.
+- `ignored` / `pinned` — take no part in spacing / never moved but others move away. Strongholds,
+  mineshafts, buried treasure, fortresses and end cities are already exempt (buried treasure
+  *must* stay put or its maps break).
+
+Datapack tags: `#structureharmony:no_spacing`, `#structureharmony:never_reject`.
+
+---
+
+## Commands (permission level 2)
+
+```
+/structureharmony report                 per-structure attempts = placed + moved + unresolved
+/structureharmony why <structure>        last 10 moves, with shift applied and distance achieved
+/structureharmony distance <a> <b>       required gap, which one moves, and its movement budget
+/structureharmony reset                  clear counters
+/structureharmony reload                 re-read config without restarting
+```
+`/sharmony` is an alias.
+
+`report` is the honesty check: `attempts` should equal `placed + moved + unresolved`, and the
+`cancelled` column should stay absent. A non-zero `cancelled` is the only way this mod can cost
+you a structure, and it only happens if you turned `cancelWhenCannotMove` on.
 
 ---
 
@@ -37,73 +130,24 @@ On top of that:
 ./gradlew build          # jar lands in build/libs/
 ./gradlew runClient      # test in-game
 ```
-Requires JDK 17. Targets Forge 47.3.0 / MC 1.20.1 — bump `forge_version` in `gradle.properties` if your pack uses another build.
-
-CI builds every push and attaches the jar to a release. It also boots a dedicated
-server and generates spawn chunks, failing the build on any mixin error — the step
-runs the server out to a 10-minute cap, so a full pipeline takes ~13 minutes.
+JDK 17, Forge 47.3.0 / MC 1.20.1. CI builds every push, boots a dedicated server, generates
+spawn chunks, fails on any mixin error or resolver exception, and attaches the jar to a release.
 
 ---
 
-## Config — `config/structureharmony-common.toml`
+## Known limits
 
-Every `*Overrides` list shares one selector syntax, most specific wins:
-
-```
-"minecraft:village_plains=10"   exact structure
-"@yourmod=8"                    every structure from a mod
-"#yourmod:big_stuff=14"         every structure in a structure tag
-"*=6"                           fallback
-```
-
-### `[spacing]`
-- `defaultRadius = 4` — required gap between two structures is `radiusA + radiusB + extraBuffer` **in chunks**. Two defaults = 8 chunks = 128 blocks.
-- `radiusOverrides` — per-structure. Mansion 12, villages 7, ruined portals 2 by default.
-- `priorityOverrides` — higher wins the collision, the lower one yields. Vanilla gets −10 while `preferModdedOverVanilla` is on.
-- `pairOverrides` — `"a|b=distance"` for one specific pair. `=0` lets a pair overlap freely (villages + outposts ship like this, since vanilla intends them to be close).
-- `ignored` — takes no part in spacing at all.
-- `failOpenRatio = 0.6` — set to `1.0` to disable the safety valve and enforce spacing strictly.
-
-### `[blending]`
-- `margin = 10` — how far the ground is feathered back to natural height (smoothstep, so no visible step or plateau rim).
-- `anchorOffset = 0` — ground level is `box.minY + anchorOffset`. **This is the knob to turn first.** `-1`/`-2` if structures sit one course proud of the dirt, `+1` if the bottom row gets buried.
-- `maxRaise = 10`, `maxLower = 20` — caps outside the footprint, so a cliff never gets levelled for 40 blocks.
-- `clearInsideFully = true` — inside the footprint, `maxLower` is ignored and overhangs above the build are taken out too. This is what un-buries structures on mountains.
-- `surfaceStructuresOnly = true` — only `SURFACE_STRUCTURES`-step structures, which keeps the smoother away from mineshafts and fortresses.
-- `waterMode = SKIP_WATER_COLUMNS` — oceans left alone by default.
-- `respectOtherStructures = true` — ground inside another structure's bounding box is never touched.
-
-### Datapack tags (override these instead of the config if you ship a pack)
-`#structureharmony:no_spacing` · `#structureharmony:never_reject` · `#structureharmony:no_smoothing` · `#structureharmony:terrain` · `#structureharmony:overgrowth` · `#structureharmony:never_replace`
-
----
-
-## Commands (permission level 2)
-
-```
-/structureharmony report                 per-structure placed / attempts / rejected / fail-open
-/structureharmony why <structure>        last 10 rejections with chunk + block coords
-/structureharmony distance <a> <b>       effective required gap and which one yields
-/structureharmony reset                  clear counters
-/structureharmony reload                 re-read the config without restarting
-```
-`/sharmony` is an alias.
-
-### Checking it works
-1. New world, fly around generating chunks (or `/forceload`).
-2. `/structureharmony report` — `placed` climbing for your structures means they're generating; `rejected` climbing means overlaps are being caught.
-3. If one of your structures looks too rare: `/structureharmony why yourmod:thing` tells you exactly what it keeps yielding to. Then drop that neighbour's radius, raise your priority, or add a `pairOverrides` entry.
-
----
-
-## Known limits — worth reading before you ship this in a pack
-
-- **Already-generated chunks are untouched.** Both features only run as chunks generate. Existing worlds keep their existing overlaps.
-- **Biome matching is approximate.** It samples the biome at sea level in the neighbour's chunk, not the exact position the neighbour would have anchored at. It errs toward *allowing* placement.
-- **No cascade resolution.** If A yields to B and B later yields to C, A's rejection was unnecessary. Single-pass, by design — resolving cascades would reintroduce generation-order dependence.
-- **The fail-open valve is order-dependent** by nature (it counts what actually happened). Counters are per-seed and reset on restart. Set `failOpenRatio = 1.0` for fully deterministic spacing.
-- **Blending uses the structure's bounding box**, which for a build with a deep basement extends well below the visible floor. That's what `anchorOffset` and the per-structure overrides are for; `#structureharmony:no_smoothing` is the escape hatch.
-- **Modded ground blocks**: new ground is built by copying the blocks already in the column, so it adapts to any biome. *Carving through* an unrecognised block is refused on purpose, so another mod's build is never eaten — if a modded stone won't carve, add it to `#structureharmony:terrain` (preferred) or set `carveUnknownBlocks = true`.
-- **Mixin targets**: `ChunkGenerator#createStructures`, `ChunkGenerator#applyBiomeDecoration`, `StructureManager#setStartForStructure`. All three are `require = 1`, which means **if another mod overwrites one of those methods, the game fails at startup** with a mixin error naming the method, rather than loading and silently doing nothing. That is deliberate — a spacing mod that quietly no-ops is the worst outcome. If you hit it in a pack and want the mod to stand down instead, drop `require = 1` from the injection in question and rebuild.
-- `/structureharmony report` prints `hooks: spacing active, blending active` once chunks have generated. If either says `not seen yet` after exploring new terrain, that feature is not running.
-- **Verified so far**: compiles against Forge 47.3.0/MC 1.20.1, mixins apply (confirmed by a dedicated server booting to `Done` with spawn chunks generated), refmap resolves all three targets. **Not yet verified**: the actual in-world look of blended terrain and the spacing distances in a populated modpack. Those need play-testing with your own structures — start with `anchorOffset` and the `radiusOverrides` numbers.
+- **Already-generated chunks are untouched.** Only newly generated chunks are affected.
+- **Large structures barely move.** See the table above — this is an engine limit.
+- `/locate structure` reports the position of the chunk that *owns* a structure, so after a
+  displacement it can be off by up to the shift distance.
+- **Biome matching is approximate.** One biome sample per candidate chunk at sea level. It errs
+  toward allowing placement rather than moving things needlessly.
+- **No cascade resolution.** If A moves away from B and B later moves too, A's move was computed
+  against B's original spot. Single pass, by design — resolving cascades would reintroduce
+  generation-order dependence.
+- **Mixin targets** (`ChunkGenerator#createStructures`, `StructureManager#setStartForStructure`)
+  are `require = 1`: if another mod overwrites one, the game fails at startup naming the method
+  rather than loading and silently doing nothing.
+- **Verified**: compiles, mixins apply, server boots and generates terrain, resolver does not
+  throw. **Not verified**: how the separation feels in a populated modpack. That needs play-testing.

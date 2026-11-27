@@ -8,9 +8,9 @@ version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
 description='''
-Stops structures from different mods (and vanilla) from overlapping or generating on top of
-each other, and smooths the terrain around structures so they stop floating in the air or
-getting buried when they generate on mountains.
+Stops structures from different mods (and vanilla) generating on top of each other. When two
+collide, the higher priority one stays put and the lower priority one is moved aside so they
+end up at least 100 blocks apart. Structures are never deleted to resolve a conflict.
 '''
 
 [[mixins]]

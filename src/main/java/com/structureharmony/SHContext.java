@@ -1,6 +1,7 @@
 package com.structureharmony;
 
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
@@ -8,16 +9,15 @@ import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import javax.annotation.Nullable;
 
 /**
- * ChunkGenerator#createStructures hands us the registries and the generator's structure state;
- * StructureManager#setStartForStructure, where the actual filtering happens, does not get them.
- * createStructures calls setStartForStructure synchronously on the same worldgen thread, so a
- * thread-local handover is safe. Set-and-overwrite (never a stack), so a thrown exception
- * upstream cannot leave a stale value that matters.
+ * ChunkGenerator#createStructures has the registries, the generator's structure state and the
+ * chunk; StructureManager#setStartForStructure, where the work happens, gets none of them.
+ * createStructures calls it synchronously on the same worldgen thread, so a thread-local
+ * handover is safe. Set-and-overwrite, never a stack.
  */
 public final class SHContext {
 
     public record Ctx(RegistryAccess registries, ChunkGeneratorStructureState state,
-                      BiomeSource biomeSource, ChunkGenerator generator) {}
+                      BiomeSource biomeSource, ChunkGenerator generator, LevelHeightAccessor heightAccessor) {}
 
     private static final ThreadLocal<Ctx> CURRENT = new ThreadLocal<>();
 

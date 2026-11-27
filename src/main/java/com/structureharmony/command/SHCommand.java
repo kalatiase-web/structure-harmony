@@ -5,7 +5,7 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.structureharmony.SHConfig;
 import com.structureharmony.SHRules;
 import com.structureharmony.SHStats;
-import com.structureharmony.StructureHarmony;
+import com.structureharmony.spacing.Displacer;
 import com.structureharmony.spacing.SpacingEngine;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -14,6 +14,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.levelgen.structure.Structure;
@@ -59,47 +60,57 @@ public final class SHCommand {
                 .redirect(dispatcher.getRoot().getChild("structureharmony")));
     }
 
-    /** Proof that structures are still generating, and how much they are losing. */
+    /**
+     * placed + moved + unresolved should add up to attempts. cancelled stays at zero unless
+     * cancelWhenCannotMove was turned on, and a non-zero cancelled column is the only way this
+     * mod can cost you a structure.
+     */
     private static int report(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal(String.format(
-                "hooks: spacing %s, blending %s",
-                SHStats.isSpacingHookLive() ? "active" : "not seen yet",
-                SHStats.isBlendHookLive() ? "active" : "not seen yet")), false);
+        source.sendSuccess(() -> Component.literal(
+                "hook: " + (SHStats.isHookLive() ? "active" : "not seen yet - generate some new chunks")), false);
 
         Map<String, SHStats.Entry> snapshot = SHStats.snapshot();
         if (snapshot.isEmpty()) {
-            source.sendSuccess(() -> Component.literal(
-                    "No structure placements seen yet this session. Generate some new chunks first."), false);
+            source.sendSuccess(() -> Component.literal("No structure placements seen yet this session."), false);
             return 0;
         }
 
         List<Map.Entry<String, SHStats.Entry>> rows = new ArrayList<>(snapshot.entrySet());
         rows.sort((a, b) -> Integer.compare(b.getValue().attempts().get(), a.getValue().attempts().get()));
 
-        source.sendSuccess(() -> Component.literal("structure: placed / attempts (rejected, fail-open)"), false);
+        int moved = 0, unresolved = 0, cancelled = 0;
+        source.sendSuccess(() -> Component.literal("structure: attempts = placed + moved + unresolved"), false);
         for (Map.Entry<String, SHStats.Entry> row : rows) {
             SHStats.Entry e = row.getValue();
-            String line = String.format("%s: %d / %d (rejected %d, fail-open %d)",
-                    row.getKey(), e.placed().get(), e.attempts().get(), e.rejected().get(), e.failOpen().get());
+            moved += e.moved().get();
+            unresolved += e.unresolved().get();
+            cancelled += e.cancelled().get();
+            String line = String.format("%s: %d = %d + %d moved + %d unresolved%s",
+                    row.getKey(), e.attempts().get(), e.placed().get(), e.moved().get(), e.unresolved().get(),
+                    e.cancelled().get() > 0 ? (" + " + e.cancelled().get() + " CANCELLED") : "");
             source.sendSuccess(() -> Component.literal(line), false);
         }
+
+        final int m = moved, u = unresolved, c = cancelled;
+        source.sendSuccess(() -> Component.literal(String.format(
+                "totals: %d moved aside, %d could not be moved far enough (generated anyway), %d cancelled",
+                m, u, c)), false);
         return rows.size();
     }
 
     private static int why(CommandSourceStack source, ResourceLocation id) {
-        List<SHStats.Rejection> history = SHStats.history().stream()
-                .filter(r -> r.structure().equals(id.toString()))
+        List<SHStats.Event> history = SHStats.history().stream()
+                .filter(e -> e.structure().equals(id.toString()))
                 .toList();
         if (history.isEmpty()) {
             source.sendSuccess(() -> Component.literal(
-                    id + " has not been rejected recently (or debug.historySize is 0)."), false);
+                    id + " has not been moved or blocked recently (or debug.historySize is 0)."), false);
             return 0;
         }
         int from = Math.max(0, history.size() - 10);
-        for (SHStats.Rejection r : history.subList(from, history.size())) {
-            String line = String.format("chunk %d,%d (block %d,%d): yielded to %s at %.1f chunks, needs %.0f",
-                    r.chunkX(), r.chunkZ(), r.chunkX() * 16, r.chunkZ() * 16,
-                    r.yieldedTo(), r.distance(), r.required());
+        for (SHStats.Event e : history.subList(from, history.size())) {
+            String line = String.format("%s vs %s: shift (%d,%d,%d) -> %.0f blocks apart, wanted %.0f",
+                    e.outcome(), e.other(), e.dx(), e.dy(), e.dz(), e.achieved(), e.required());
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return history.size();
@@ -108,8 +119,8 @@ public final class SHCommand {
     private static int distance(CommandSourceStack source, ResourceLocation a, ResourceLocation b) {
         ServerLevel level = source.getLevel();
         Registry<Structure> registry = level.registryAccess().registryOrThrow(Registries.STRUCTURE);
-        Holder<Structure> ha = registry.getHolder(net.minecraft.resources.ResourceKey.create(Registries.STRUCTURE, a)).orElse(null);
-        Holder<Structure> hb = registry.getHolder(net.minecraft.resources.ResourceKey.create(Registries.STRUCTURE, b)).orElse(null);
+        Holder<Structure> ha = registry.getHolder(ResourceKey.create(Registries.STRUCTURE, a)).orElse(null);
+        Holder<Structure> hb = registry.getHolder(ResourceKey.create(Registries.STRUCTURE, b)).orElse(null);
         if (ha == null || hb == null) {
             source.sendFailure(Component.literal("Unknown structure id: " + (ha == null ? a : b)));
             return 0;
@@ -117,24 +128,31 @@ public final class SHCommand {
 
         SHRules.Parsed rules = SHRules.get();
         long seed = level.getSeed();
-        int pair = rules.pairDistance(ha, a, hb, b);
-        int ra = rules.radius(ha, a);
-        int rb = rules.radius(hb, b);
-        int required = pair >= 0 ? pair : ra + rb + SHConfig.extraBuffer.get();
+        int required = rules.requiredDistance(ha, a, hb, b);
         int order = rules.compareOrder(ha, a, hb, b, seed);
-        String loser = order < 0 ? a.toString() : b.toString();
+        String mover = order < 0 ? a.toString() : b.toString();
 
         source.sendSuccess(() -> Component.literal(String.format(
                 "%s (radius %d, priority %d) vs %s (radius %d, priority %d)",
-                a, ra, rules.priority(ha, a), b, rb, rules.priority(hb, b))), false);
-        source.sendSuccess(() -> Component.literal(String.format(
-                "required distance: %d chunks (%d blocks)%s", required, required * 16,
-                pair >= 0 ? " [pair override]" : "")), false);
+                a, rules.radius(ha, a), rules.priority(ha, a),
+                b, rules.radius(hb, b), rules.priority(hb, b))), false);
         source.sendSuccess(() -> Component.literal(
-                rules.spacingIgnored(ha, a) || rules.spacingIgnored(hb, b)
-                        ? "one of these is excluded from spacing - they will never be separated"
-                        : "on a collision, " + loser + " is the one that yields"), false);
-        StructureHarmony.LOG.debug("[StructureHarmony] /distance {} {} -> {}", a, b, required);
+                "required distance: " + required + " blocks"), false);
+
+        if (rules.ignored(ha, a) || rules.ignored(hb, b)) {
+            source.sendSuccess(() -> Component.literal(
+                    "one of these is excluded from spacing - they will never be separated"), false);
+        } else if (rules.pinned(ha, a) && rules.pinned(hb, b)) {
+            source.sendSuccess(() -> Component.literal(
+                    "both are pinned - neither can be moved, so a collision is left alone"), false);
+        } else {
+            source.sendSuccess(() -> Component.literal(
+                    "on a collision, " + mover + " is the one that gets moved aside"), false);
+        }
+        source.sendSuccess(() -> Component.literal(String.format(
+                "movement budget: %d blocks configured, hard engine ceiling %d blocks",
+                Math.min(rules.maxShift(ha, a), rules.maxShift(hb, b)),
+                Displacer.SAFE_CHUNK_RADIUS * 16)), false);
         return required;
     }
 

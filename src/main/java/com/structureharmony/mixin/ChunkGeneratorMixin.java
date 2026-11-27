@@ -1,10 +1,8 @@
 package com.structureharmony.mixin;
 
 import com.structureharmony.SHContext;
-import com.structureharmony.blend.TerrainSmoother;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.world.level.StructureManager;
-import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
@@ -14,20 +12,20 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+/**
+ * createStructures owns the registries, the generator's structure state and the chunk being
+ * generated. Hand them to the thread-local so the resolver in StructureManagerMixin, which runs
+ * synchronously inside this call, can see them.
+ */
 @Mixin(ChunkGenerator.class)
 public abstract class ChunkGeneratorMixin {
 
-    /**
-     * createStructures owns the registries and the generator's structure state. Hand them to the
-     * thread-local so the filter in StructureManagerMixin, which runs synchronously inside this
-     * call, can see them.
-     */
     @Inject(method = "createStructures", at = @At("HEAD"), require = 1)
     private void structureharmony$pushContext(RegistryAccess registries, ChunkGeneratorStructureState state,
                                               StructureManager structureManager, ChunkAccess chunk,
                                               StructureTemplateManager templates, CallbackInfo ci) {
         ChunkGenerator self = (ChunkGenerator) (Object) this;
-        SHContext.set(new SHContext.Ctx(registries, state, self.getBiomeSource(), self));
+        SHContext.set(new SHContext.Ctx(registries, state, self.getBiomeSource(), self, chunk));
     }
 
     @Inject(method = "createStructures", at = @At("RETURN"), require = 1)
@@ -35,22 +33,5 @@ public abstract class ChunkGeneratorMixin {
                                              StructureManager structureManager, ChunkAccess chunk,
                                              StructureTemplateManager templates, CallbackInfo ci) {
         SHContext.clear();
-    }
-
-    /**
-     * Terrain blending. HEAD is before any structure piece or feature lands in this chunk, and
-     * after the chunk's own terrain and surface are final - exactly the window we want.
-     */
-    @Inject(method = "applyBiomeDecoration", at = @At("HEAD"), require = 1)
-    private void structureharmony$blendTerrain(WorldGenLevel level, ChunkAccess chunk,
-                                               StructureManager structureManager, CallbackInfo ci) {
-        com.structureharmony.SHStats.markBlendHookLive();
-        try {
-            TerrainSmoother.blendChunk((ChunkGenerator) (Object) this, level, chunk, structureManager);
-        } catch (Throwable t) {
-            com.structureharmony.StructureHarmony.LOG.error(
-                    "[StructureHarmony] terrain blending failed in chunk {} - chunk left untouched",
-                    chunk.getPos(), t);
-        }
     }
 }

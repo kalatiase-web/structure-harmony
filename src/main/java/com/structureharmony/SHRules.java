@@ -13,8 +13,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Parses the config selector lists once and answers "what is the radius / priority / margin
+ * Parses the config selector lists once and answers "what is the radius / priority / shift limit
  * for this structure". Specificity order: exact id > tag > namespace > "*" > hard default.
+ * All distances are in blocks.
  */
 public final class SHRules {
 
@@ -27,20 +28,16 @@ public final class SHRules {
         if (p == null) {
             synchronized (SHRules.class) {
                 p = parsed;
-                if (p == null) {
-                    p = new Parsed();
-                    parsed = p;
-                }
+                if (p == null) { p = new Parsed(); parsed = p; }
             }
         }
         return p;
     }
 
-    /** One "selector=value" rule. */
     private record Rule(Kind kind, String key, int value) {
         enum Kind { EXACT, TAG, NAMESPACE, ANY }
 
-        boolean matches(Holder<Structure> holder, ResourceLocation id) {
+        boolean matches(@Nullable Holder<Structure> holder, ResourceLocation id) {
             return switch (kind) {
                 case EXACT -> id.toString().equals(key);
                 case NAMESPACE -> id.getNamespace().equals(key);
@@ -58,20 +55,6 @@ public final class SHRules {
         }
     }
 
-    private static List<Rule> parseRules(List<? extends String> raw) {
-        List<Rule> out = new ArrayList<>();
-        for (String entry : raw) {
-            int eq = entry.lastIndexOf('=');
-            if (eq <= 0) continue;
-            String sel = entry.substring(0, eq).trim();
-            int value;
-            try { value = Integer.parseInt(entry.substring(eq + 1).trim()); }
-            catch (NumberFormatException e) { continue; }
-            out.add(toRule(sel, value));
-        }
-        return out;
-    }
-
     private static Rule toRule(String sel, int value) {
         if (sel.equals("*")) return new Rule(Rule.Kind.ANY, "*", value);
         if (sel.startsWith("#")) return new Rule(Rule.Kind.TAG, sel.substring(1), value);
@@ -80,20 +63,17 @@ public final class SHRules {
         return new Rule(Rule.Kind.EXACT, sel, value);
     }
 
-    private static int resolve(List<Rule> rules, Holder<Structure> holder, ResourceLocation id, int fallback) {
-        int best = fallback;
-        int bestSpec = -1;
-        for (Rule r : rules) {
-            int spec = r.specificity();
-            if (spec <= bestSpec) continue;
-            if (r.matches(holder, id)) { best = r.value(); bestSpec = spec; }
+    private static List<Rule> parseRules(List<? extends String> raw) {
+        List<Rule> out = new ArrayList<>();
+        for (String entry : raw) {
+            int eq = entry.lastIndexOf('=');
+            if (eq <= 0) continue;
+            int value;
+            try { value = Integer.parseInt(entry.substring(eq + 1).trim()); }
+            catch (NumberFormatException e) { continue; }
+            out.add(toRule(entry.substring(0, eq).trim(), value));
         }
-        return best;
-    }
-
-    private static boolean matchesAny(List<Rule> rules, Holder<Structure> holder, ResourceLocation id) {
-        for (Rule r : rules) if (r.matches(holder, id)) return true;
-        return false;
+        return out;
     }
 
     private static List<Rule> parseSelectors(List<? extends String> raw) {
@@ -105,17 +85,30 @@ public final class SHRules {
         return out;
     }
 
-    /** Snapshot of the parsed config. Rebuilt on config reload. */
+    private static int resolve(List<Rule> rules, @Nullable Holder<Structure> holder,
+                               ResourceLocation id, int fallback) {
+        int best = fallback;
+        int bestSpec = -1;
+        for (Rule r : rules) {
+            int spec = r.specificity();
+            if (spec <= bestSpec) continue;
+            if (r.matches(holder, id)) { best = r.value(); bestSpec = spec; }
+        }
+        return best;
+    }
+
+    private static boolean matchesAny(List<Rule> rules, @Nullable Holder<Structure> holder, ResourceLocation id) {
+        for (Rule r : rules) if (r.matches(holder, id)) return true;
+        return false;
+    }
+
     public static final class Parsed {
-        private final List<Rule> radius          = parseRules(SHConfig.radiusOverrides.get());
-        private final List<Rule> priority        = parseRules(SHConfig.priorityOverrides.get());
-        private final List<Rule> spacingIgnored  = parseSelectors(SHConfig.spacingIgnored.get());
-        private final List<Rule> blendIgnored    = parseSelectors(SHConfig.blendIgnored.get());
-        private final List<Rule> marginRules     = parseRules(SHConfig.marginOverrides.get());
-        private final List<Rule> raiseRules      = parseRules(SHConfig.maxRaiseOverrides.get());
-        private final List<Rule> lowerRules      = parseRules(SHConfig.maxLowerOverrides.get());
-        private final List<Rule> anchorRules     = parseRules(SHConfig.anchorOffsetOverrides.get());
-        private final List<PairRule> pairs       = parsePairs(SHConfig.pairOverrides.get());
+        private final List<Rule> radius    = parseRules(SHConfig.radiusOverrides.get());
+        private final List<Rule> priority  = parseRules(SHConfig.priorityOverrides.get());
+        private final List<Rule> shift     = parseRules(SHConfig.maxShiftOverrides.get());
+        private final List<Rule> ignored   = parseSelectors(SHConfig.ignored.get());
+        private final List<Rule> pinned    = parseSelectors(SHConfig.pinned.get());
+        private final List<PairRule> pairs = parsePairs(SHConfig.pairOverrides.get());
 
         private final Map<String, Integer> radiusCache   = new ConcurrentHashMap<>();
         private final Map<String, Integer> priorityCache = new ConcurrentHashMap<>();
@@ -139,10 +132,11 @@ public final class SHRules {
             return out;
         }
 
+        /** Radius in blocks. */
         public int radius(@Nullable Holder<Structure> holder, ResourceLocation id) {
             Integer cached = radiusCache.get(id.toString());
             if (cached != null) return cached;
-            int v = Math.max(0, resolve(radius, holder, id, SHConfig.defaultRadius.get()));
+            int v = Math.max(0, resolve(radius, holder, id, 0));
             radiusCache.put(id.toString(), v);
             return v;
         }
@@ -156,63 +150,49 @@ public final class SHRules {
             return v;
         }
 
-        public boolean spacingIgnored(@Nullable Holder<Structure> holder, ResourceLocation id) {
+        /** Largest displacement in blocks this structure is allowed, before engine limits. */
+        public int maxShift(@Nullable Holder<Structure> holder, ResourceLocation id) {
+            return Math.max(0, resolve(shift, holder, id, SHConfig.maxShift.get()));
+        }
+
+        public boolean ignored(@Nullable Holder<Structure> holder, ResourceLocation id) {
             if (holder != null && holder.is(SHTags.NO_SPACING)) return true;
-            return matchesAny(spacingIgnored, holder, id);
+            return matchesAny(ignored, holder, id);
         }
 
-        public boolean neverReject(@Nullable Holder<Structure> holder) {
-            return holder != null && holder.is(SHTags.NEVER_REJECT);
+        /** Never moved itself, but other structures still move away from it. */
+        public boolean pinned(@Nullable Holder<Structure> holder, ResourceLocation id) {
+            if (holder != null && holder.is(SHTags.NEVER_REJECT)) return true;
+            return matchesAny(pinned, holder, id);
         }
 
-        public boolean blendIgnored(@Nullable Holder<Structure> holder, ResourceLocation id) {
-            if (holder != null && holder.is(SHTags.NO_SMOOTHING)) return true;
-            return matchesAny(blendIgnored, holder, id);
-        }
-
-        public int margin(@Nullable Holder<Structure> h, ResourceLocation id) {
-            return Math.max(0, resolve(marginRules, h, id, SHConfig.margin.get()));
-        }
-
-        public int maxRaise(@Nullable Holder<Structure> h, ResourceLocation id) {
-            return Math.max(0, resolve(raiseRules, h, id, SHConfig.maxRaise.get()));
-        }
-
-        public int maxLower(@Nullable Holder<Structure> h, ResourceLocation id) {
-            return Math.max(0, resolve(lowerRules, h, id, SHConfig.maxLower.get()));
-        }
-
-        public int anchorOffset(@Nullable Holder<Structure> h, ResourceLocation id) {
-            return resolve(anchorRules, h, id, SHConfig.anchorOffset.get());
-        }
-
-        /** Required chunk distance between two structures, or -1 when no pair override applies. */
-        public int pairDistance(@Nullable Holder<Structure> ha, ResourceLocation a,
-                                @Nullable Holder<Structure> hb, ResourceLocation b) {
-            int best = -1;
+        /** Required centre-to-centre distance in blocks between two structures. */
+        public int requiredDistance(@Nullable Holder<Structure> ha, ResourceLocation a,
+                                    @Nullable Holder<Structure> hb, ResourceLocation b) {
             int bestSpec = -1;
+            int pair = -1;
             for (PairRule p : pairs) {
                 boolean forward = p.a().matches(ha, a) && p.b().matches(hb, b);
                 boolean reverse = p.a().matches(hb, b) && p.b().matches(ha, a);
                 if (!forward && !reverse) continue;
                 int spec = p.a().specificity() + p.b().specificity();
-                if (spec > bestSpec) { bestSpec = spec; best = p.distance(); }
+                if (spec > bestSpec) { bestSpec = spec; pair = p.distance(); }
             }
-            return best;
+            if (pair >= 0) return pair;
+            int sum = radius(ha, a) + radius(hb, b);
+            return Math.max(SHConfig.minSeparation.get(), sum) + SHConfig.extraBuffer.get();
         }
 
         /**
-         * Total, deterministic order over structures. The structure with the LOWER order yields.
-         * Seed is mixed into the tie-break so equal-priority collisions are not decided
-         * alphabetically (which would always favour the same mod).
+         * Total, deterministic order. The structure with the LOWER order is the one that moves.
+         * The seed is mixed into the tie-break so equal priorities are not settled alphabetically,
+         * which would always favour whichever mod id happens to sort first.
          */
         public int compareOrder(@Nullable Holder<Structure> ha, ResourceLocation a,
-                               @Nullable Holder<Structure> hb, ResourceLocation b, long seed) {
+                                @Nullable Holder<Structure> hb, ResourceLocation b, long seed) {
             int cmp = Integer.compare(priority(ha, a), priority(hb, b));
             if (cmp != 0) return cmp;
-            long ta = tieBreak(a, seed);
-            long tb = tieBreak(b, seed);
-            cmp = Long.compare(ta, tb);
+            cmp = Long.compare(tieBreak(a, seed), tieBreak(b, seed));
             if (cmp != 0) return cmp;
             return a.toString().compareTo(b.toString());
         }
