@@ -1,0 +1,10 @@
+build/
+.gradle/
+run/
+src/generated/
+*.iml
+.idea/
+.eclipse/
+.settings/
+bin/
+out/

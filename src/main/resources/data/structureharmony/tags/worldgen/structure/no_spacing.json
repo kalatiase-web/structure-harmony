@@ -1,0 +1,12 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "minecraft:stronghold",       "required": false },
+    { "id": "minecraft:mineshaft",        "required": false },
+    { "id": "minecraft:mineshaft_mesa",   "required": false },
+    { "id": "minecraft:buried_treasure",  "required": false },
+    { "id": "minecraft:end_city",         "required": false },
+    { "id": "minecraft:fortress",         "required": false },
+    { "id": "minecraft:bastion_remnant",  "required": false }
+  ]
+}
