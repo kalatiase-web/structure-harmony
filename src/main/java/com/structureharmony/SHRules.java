@@ -4,6 +4,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
+import com.structureharmony.spacing.StructureSizes;
 import net.minecraft.world.level.levelgen.structure.Structure;
 
 import javax.annotation.Nullable;
@@ -195,13 +196,23 @@ public final class SHRules {
 
         /**
          * Total, deterministic order. The structure with the LOWER order is the one that moves.
-         * The seed is mixed into the tie-break so equal priorities are not settled alphabetically,
-         * which would always favour whichever mod id happens to sort first.
+         *
+         * Size comes before the random tie-break on purpose: displacement headroom shrinks as a
+         * structure gets bigger, so moving the smaller of the pair is what actually achieves the
+         * separation. Deciding it by coin flip means half of all conflicts try to shove a village
+         * and barely manage to clear its walls.
+         *
+         * The seed is mixed into the final tie-break so same-size collisions are not settled
+         * alphabetically, which would always favour whichever mod id happens to sort first.
          */
         public int compareOrder(@Nullable Holder<Structure> ha, ResourceLocation a,
                                 @Nullable Holder<Structure> hb, ResourceLocation b, long seed) {
             int cmp = Integer.compare(priority(ha, a), priority(hb, b));
             if (cmp != 0) return cmp;
+            if (SHConfig.sizeDecidesWhoMoves.get()) {
+                cmp = Integer.compare(StructureSizes.halfSpan(a), StructureSizes.halfSpan(b));
+                if (cmp != 0) return cmp;
+            }
             cmp = Long.compare(tieBreak(a, seed), tieBreak(b, seed));
             if (cmp != 0) return cmp;
             return a.toString().compareTo(b.toString());

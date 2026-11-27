@@ -34,6 +34,7 @@ public final class SHConfig {
     public static ForgeConfigSpec.BooleanValue cancelWhenCannotMove;
     public static ForgeConfigSpec.BooleanValue checkBiomes;
     public static ForgeConfigSpec.BooleanValue preferModdedOverVanilla;
+    public static ForgeConfigSpec.BooleanValue sizeDecidesWhoMoves;
     public static ForgeConfigSpec.IntValue minNeighbourSpacing;
     public static ForgeConfigSpec.IntValue candidateBudget;
     public static ForgeConfigSpec.IntValue searchDirections;
@@ -140,9 +141,21 @@ public final class SHConfig {
                                 "have generated there. (Approximate - samples one biome per candidate chunk.)")
                        .define("checkBiomes", true);
 
-        preferModdedOverVanilla = b.comment("Give every non-minecraft: structure +10 priority, so a vanilla structure is the",
-                                            "one that gets moved when it collides with a modded one.")
-                                   .define("preferModdedOverVanilla", true);
+        preferModdedOverVanilla = b.comment("Give every non-minecraft: structure +10 priority, so a vanilla structure is the one",
+                                            "that gets moved when it collides with a modded one.",
+                                            "",
+                                            "OFF by default, and that is deliberate. It mattered when losing a conflict meant",
+                                            "being deleted. Now that the loser is only moved, forcing the vanilla structure to be",
+                                            "the mover usually makes things WORSE: vanilla villages are large, and a large",
+                                            "structure has almost no room to move (see maxShift), so the pair ends up barely",
+                                            "separated. Leave this off unless you specifically want modded structures pinned.")
+                                   .define("preferModdedOverVanilla", false);
+
+        sizeDecidesWhoMoves = b.comment("When no explicit priority separates two structures, the LARGER one stays put and the",
+                                        "smaller one moves. The smaller structure has far more displacement headroom, so this",
+                                        "is what actually buys you the full separation distance. priorityOverrides still wins",
+                                        "over this when you set one.")
+                               .define("sizeDecidesWhoMoves", true);
 
         minNeighbourSpacing = b.comment("Ignore structures whose placement spacing is below this (in chunks) when looking",
                                         "for conflicts - mineshaft-style structures that exist almost everywhere.")

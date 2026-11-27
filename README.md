@@ -80,6 +80,13 @@ small structure next to a village gets pushed clear, but **two large structures 
 other mostly cannot be fixed** — they will be reported as `unresolved` and both will generate.
 Raising `maxShift` past 112 does nothing.
 
+The arithmetic is worth being explicit about. Two structures that start nearly concentric need
+`minSeparation + halfA + halfB` of displacement to reach the target gap, while the mover has at
+most `112 − halfMover` available. So the full 100-block gap is only reachable when the pair are
+already somewhat apart, or the mover is small. Otherwise you get the largest gap the window
+allows, reported honestly as `unresolved` with the gap it managed. That is why
+`sizeDecidesWhoMoves` matters: it puts the mobile structure in the moving role.
+
 If you would rather lose a structure than have an unresolved overlap, set
 `cancelWhenCannotMove = true`. It is off by default on purpose.
 
@@ -108,8 +115,14 @@ Key settings:
 - `maxExtraRelief = 4` — refuse a destination whose ground is this much more uneven than the
   original. This is the setting that stops moves onto slopes.
 - `radiusOverrides` — *extra* padding beyond the measured footprint. Normally leave empty.
-- `priorityOverrides` — higher stays put, lower moves. Vanilla gets −10 while
-  `preferModdedOverVanilla` is on, so **your structures hold their ground and vanilla moves**.
+- `priorityOverrides` — higher stays put, lower moves. Set these when you want a specific
+  structure pinned.
+- `sizeDecidesWhoMoves = true` — with no explicit priority, the **larger** structure stays and the
+  smaller one moves. Displacement headroom shrinks as a structure grows, so moving the smaller of
+  the pair is what actually buys the full separation.
+- `preferModdedOverVanilla = false` — now off by default. It mattered when losing meant deletion;
+  since the loser is only moved, forcing a big vanilla village to be the mover leaves pairs barely
+  separated. Turn it on only if you want modded structures pinned regardless.
 - `pairOverrides` — `"a|b=blocks"` for one pair; `=0` lets a pair sit together (villages and
   outposts ship like this, since vanilla intends them to be close).
 - `maxShift = 96` — displacement budget, capped by the engine limit above.

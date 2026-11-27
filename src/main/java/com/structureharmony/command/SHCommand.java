@@ -112,8 +112,8 @@ public final class SHCommand {
         }
         int from = Math.max(0, history.size() - 10);
         for (SHStats.Event e : history.subList(from, history.size())) {
-            String line = String.format("%s vs %s: shift (%d,%d,%d) -> %.0f blocks apart, wanted %.0f",
-                    e.outcome(), e.other(), e.dx(), e.dy(), e.dz(), e.achieved(), e.required());
+            String line = String.format("%s vs %s: shift (%d,%d,%d) -> %.0f block gap, wanted %.0f",
+                    e.outcome(), e.other(), e.dx(), e.dy(), e.dz(), e.gap(), e.targetGap());
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return history.size();
@@ -156,8 +156,11 @@ public final class SHCommand {
             source.sendSuccess(() -> Component.literal(
                     "both are pinned - neither can be moved, so a collision is left alone"), false);
         } else {
+            String reason = rules.priority(ha, a) != rules.priority(hb, b) ? "by priority"
+                    : (SHConfig.sizeDecidesWhoMoves.get() && halfA != halfB ? "because it is the smaller one"
+                    : "by seed tie-break");
             source.sendSuccess(() -> Component.literal(
-                    "on a collision, " + mover + " is the one that gets moved aside"), false);
+                    "on a collision, " + mover + " is the one that gets moved aside (" + reason + ")"), false);
         }
         source.sendSuccess(() -> Component.literal(String.format(
                 "movement budget: %d blocks configured, hard engine ceiling %d blocks",

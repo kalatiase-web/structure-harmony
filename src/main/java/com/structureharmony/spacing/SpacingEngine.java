@@ -45,13 +45,14 @@ public final class SpacingEngine {
 
     public enum Outcome { ALLOW, MOVED, UNRESOLVED, CANCELLED }
 
+    /** gap / targetGap are EDGE to edge, which is the number that actually describes an overlap. */
     public record Decision(Outcome outcome, @Nullable ResourceLocation other,
-                           int dx, int dy, int dz, double achieved, double required) {
+                           int dx, int dy, int dz, double gap, double targetGap) {
         public static final Decision ALLOW = new Decision(Outcome.ALLOW, null, 0, 0, 0, 0, 0);
         public boolean moved() { return dx != 0 || dy != 0 || dz != 0; }
     }
 
-    private record Conflict(ResourceLocation id, int x, int z, int required) {}
+    private record Conflict(ResourceLocation id, int x, int z, int required, int halfSpan) {}
 
     private record Neighbour(Holder<Structure> holder, ResourceLocation id, StructurePlacement placement,
                              int radius, int spacing) {}
@@ -101,21 +102,23 @@ public final class SpacingEngine {
 
         Conflict worst = worstOf(conflicts, centreX, centreZ);
         double before = distance(centreX, centreZ, worst.x(), worst.z());
+        double beforeGap = before - selfHalfSpan - worst.halfSpan();
 
         // Pinned structures hold their ground; the other side of the conflict is what moves.
         if (rules.pinned(selfHolder, selfId)) {
-            return finish(selfId, new Decision(Outcome.UNRESOLVED, worst.id(), 0, 0, 0, before, worst.required()));
+            return finish(selfId, new Decision(Outcome.UNRESOLVED, worst.id(), 0, 0, 0,
+                    beforeGap, targetGap(worst, selfHalfSpan)));
         }
 
-        int allowed = Math.min(rules.maxShift(selfHolder, selfId), Displacer.headroom(box, owner));
-        if (allowed < 8) {
-            return finish(selfId, decideUnresolved(selfId, worst, 0, 0, 0, before));
-        }
+        // Bound only by the configured budget and the engine ceiling: every candidate is then
+        // tested against fitsReferenceWindow exactly, so no usable range is discarded up front.
+        int allowed = Math.min(rules.maxShift(selfHolder, selfId), Displacer.SAFE_CHUNK_RADIUS * 16);
 
-        Decision found = search(ctx, structure, selfHolder, box, owner, conflicts, centreX, centreZ, allowed);
+        Decision found = search(ctx, structure, selfHolder, box, owner, conflicts,
+                selfHalfSpan, centreX, centreZ, allowed);
         if (found != null) return finish(selfId, found);
 
-        return finish(selfId, decideUnresolved(selfId, worst, 0, 0, 0, before));
+        return finish(selfId, decideUnresolved(selfId, worst, 0, 0, 0, beforeGap, selfHalfSpan));
     }
 
     /**
@@ -127,7 +130,7 @@ public final class SpacingEngine {
     @Nullable
     private static Decision search(SHContext.Ctx ctx, Structure structure, @Nullable Holder<Structure> selfHolder,
                                    BoundingBox box, ChunkPos owner, List<Conflict> conflicts,
-                                   int centreX, int centreZ, int allowed) {
+                                   int selfHalfSpan, int centreX, int centreZ, int allowed) {
         double awayX = 0, awayZ = 0;
         for (Conflict c : conflicts) {
             double ox = centreX - c.x();
@@ -187,10 +190,10 @@ public final class SpacingEngine {
                 }
 
                 Conflict worst = worstOf(conflicts, newX, newZ);
-                double achieved = distance(newX, newZ, worst.x(), worst.z());
+                double gap = distance(newX, newZ, worst.x(), worst.z()) - selfHalfSpan - worst.halfSpan();
                 Decision candidate = new Decision(
                         violation <= 0 ? Outcome.MOVED : Outcome.UNRESOLVED,
-                        worst.id(), dx, dy, dz, achieved, worst.required());
+                        worst.id(), dx, dy, dz, gap, targetGap(worst, selfHalfSpan));
 
                 if (violation <= 0) return candidate;   // smallest fully clearing move wins
                 bestViolation = violation;
@@ -201,9 +204,14 @@ public final class SpacingEngine {
     }
 
     private static Decision decideUnresolved(ResourceLocation selfId, Conflict worst,
-                                             int dx, int dy, int dz, double achieved) {
+                                             int dx, int dy, int dz, double gap, int selfHalfSpan) {
         Outcome outcome = SHConfig.cancelWhenCannotMove.get() ? Outcome.CANCELLED : Outcome.UNRESOLVED;
-        return new Decision(outcome, worst.id(), dx, dy, dz, achieved, worst.required());
+        return new Decision(outcome, worst.id(), dx, dy, dz, gap, targetGap(worst, selfHalfSpan));
+    }
+
+    /** The clear gap, edge to edge, that this conflict was asking for. */
+    private static double targetGap(Conflict conflict, int selfHalfSpan) {
+        return Math.max(0, conflict.required() - selfHalfSpan - conflict.halfSpan());
     }
 
     private static Decision finish(ResourceLocation selfId, Decision decision) {
@@ -217,12 +225,12 @@ public final class SpacingEngine {
             SHStats.record(new SHStats.Event(selfId.toString(),
                     decision.other() == null ? "?" : decision.other().toString(),
                     0, 0, decision.dx(), decision.dy(), decision.dz(),
-                    decision.achieved(), decision.required(), decision.outcome().name()));
+                    decision.gap(), decision.targetGap(), decision.outcome().name()));
             if (SHConfig.logMoves.get()) {
-                StructureHarmony.LOG.info("[StructureHarmony] {} vs {}: {} by ({},{},{}) -> {} blocks apart (wanted {})",
+                StructureHarmony.LOG.info("[StructureHarmony] {} vs {}: {} by ({},{},{}) -> {} block gap (wanted {})",
                         selfId, decision.other(), decision.outcome(),
                         decision.dx(), decision.dy(), decision.dz(),
-                        String.format("%.0f", decision.achieved()), decision.required());
+                        String.format("%.0f", decision.gap()), String.format("%.0f", decision.targetGap()));
             }
         }
         return decision;
@@ -245,8 +253,9 @@ public final class SpacingEngine {
             if (n.spacing() < SHConfig.minNeighbourSpacing.get()) continue;
             if (rules.compareOrder(selfHolder, selfId, n.holder(), n.id(), seed) >= 0) continue;
 
+            final int neighbourHalf = StructureSizes.halfSpan(n.id());
             int required = rules.requiredDistance(selfHolder, selfId, n.holder(), n.id(),
-                    selfHalfSpan, StructureSizes.halfSpan(n.id()));
+                    selfHalfSpan, neighbourHalf);
             if (required <= 0) continue;
             int scanChunks = Math.min(16, (required >> 4) + 2);
 
@@ -256,7 +265,7 @@ public final class SpacingEngine {
                         int bz = (cz << 4) + 8;
                         if (distance(centreX, centreZ, bx, bz) >= required) return true;
                         if (SHConfig.checkBiomes.get() && !biomeAllows(ctx, n.holder(), bx, bz)) return true;
-                        conflicts.add(new Conflict(n.id(), bx, bz, required));
+                        conflicts.add(new Conflict(n.id(), bx, bz, required, neighbourHalf));
                         return true;
                     });
         }

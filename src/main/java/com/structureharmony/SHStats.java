@@ -25,7 +25,7 @@ public final class SHStats {
     }
 
     public record Event(String structure, String other, int fromX, int fromZ,
-                        int dx, int dy, int dz, double achieved, double required, String outcome) {}
+                        int dx, int dy, int dz, double gap, double targetGap, String outcome) {}
 
     private static volatile boolean hookLive = false;
 
