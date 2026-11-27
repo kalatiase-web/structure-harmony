@@ -42,8 +42,10 @@ jobs:
       # Minecraft jar, so a wrong import is fixed in one round trip instead of by guessing.
       - name: Locate unresolved classes
         if: steps.build.outcome != 'success'
+        continue-on-error: true
         shell: bash
         run: |
+          set +e
           names=$(grep -oP 'symbol:\s+class \K\w+' build.log 2>/dev/null | sort -u)
           [ -z "$names" ] && echo "no unresolved classes" && exit 0
           jars=$(find ~/.gradle/caches -name '*.jar' 2>/dev/null | grep -iE 'forge|minecraft|client|joined' | head -60)
