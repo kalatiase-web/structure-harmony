@@ -15,7 +15,6 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Climate;
 import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import net.minecraft.world.level.levelgen.GenerationStep;
-import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
@@ -79,17 +78,22 @@ public final class SpacingEngine {
         Holder<Structure> selfHolder = holderOf(registry, structure);
 
         SHRules.Parsed rules = SHRules.get();
-        if (rules.ignored(selfHolder, selfId)) return Decision.ALLOW;
 
         BoundingBox box = Displacer.boxOf(start);
         if (box == null) return Decision.ALLOW;
+
+        // Learn this structure's real footprint before anything else, so the size cache fills in
+        // even for structures that take no part in spacing themselves.
+        StructureSizes.observe(selfId, box);
+        if (rules.ignored(selfHolder, selfId)) return Decision.ALLOW;
 
         SHStats.attempt(selfId);
 
         int centreX = (box.minX() + box.maxX()) / 2;
         int centreZ = (box.minZ() + box.maxZ()) / 2;
 
-        List<Conflict> conflicts = findConflicts(ctx, rules, selfHolder, selfId, centreX, centreZ);
+        int selfHalfSpan = StructureSizes.halfSpanOf(box);
+        List<Conflict> conflicts = findConflicts(ctx, rules, selfHolder, selfId, selfHalfSpan, centreX, centreZ);
         if (conflicts.isEmpty()) {
             SHStats.placed(selfId);
             return Decision.ALLOW;
@@ -137,20 +141,24 @@ public final class SpacingEngine {
         }
         double baseAngle = (awayX == 0 && awayZ == 0) ? 0 : Math.atan2(awayZ, awayX);
 
+        boolean surfaceStructure = structure.step() == GenerationStep.Decoration.SURFACE_STRUCTURES;
+        SiteCheck.Site origin = surfaceStructure ? SiteCheck.sample(ctx, box, 0, 0) : null;
+        int siteBudget = SHConfig.siteCheckBudget.get();
+
         int dirs = SHConfig.searchDirections.get();
         double step = (2 * Math.PI) / dirs;
 
         Decision best = null;
         double bestViolation = Double.MAX_VALUE;
 
-        for (int k = 0; k < dirs; k++) {
+        for (int k = 0; k < dirs && siteBudget > 0; k++) {
             // 0, +1, -1, +2, -2 ... so directions closest to "straight away" are tried first.
             int offset = ((k + 1) / 2) * ((k % 2 == 0) ? 1 : -1);
             double angle = baseAngle + offset * step;
             double ux = Math.cos(angle);
             double uz = Math.sin(angle);
 
-            for (int magnitude = 8; magnitude <= allowed; magnitude += 8) {
+            for (int magnitude = 16; magnitude <= allowed && siteBudget > 0; magnitude += 16) {
                 int dx = (int) Math.round(ux * magnitude);
                 int dz = (int) Math.round(uz * magnitude);
                 if (dx == 0 && dz == 0) continue;
@@ -159,13 +167,24 @@ public final class SpacingEngine {
                 int newX = centreX + dx;
                 int newZ = centreZ + dz;
                 double violation = worstViolation(conflicts, newX, newZ);
-
                 if (violation >= bestViolation && violation > 0) continue;
 
                 if (SHConfig.keepBiome.get() && !biomeAllows(ctx, selfHolder, newX, newZ)) continue;
 
-                int dy = verticalCorrection(ctx, structure, centreX, centreZ, newX, newZ);
-                if (dy == Integer.MIN_VALUE) continue;
+                // Is the destination somewhere this thing could actually stand? Sampled across the
+                // whole footprint, because the centre column alone hides ponds and slopes.
+                int dy = 0;
+                if (origin != null) {
+                    siteBudget--;
+                    SiteCheck.Site site = SiteCheck.sample(ctx, box, dx, dz);
+                    if (site == null) continue;
+                    if (SHConfig.avoidWater.get() && site.water() && !origin.water()) continue;
+                    if (site.relief() > origin.relief() + SHConfig.maxExtraRelief.get()) continue;
+                    if (SHConfig.followTerrainHeight.get()) {
+                        dy = site.ground() - origin.ground();
+                        if (Math.abs(dy) > SHConfig.maxVerticalShift.get()) continue;
+                    }
+                }
 
                 Conflict worst = worstOf(conflicts, newX, newZ);
                 double achieved = distance(newX, newZ, worst.x(), worst.z());
@@ -211,7 +230,7 @@ public final class SpacingEngine {
 
     private static List<Conflict> findConflicts(SHContext.Ctx ctx, SHRules.Parsed rules,
                                                 @Nullable Holder<Structure> selfHolder, ResourceLocation selfId,
-                                                int centreX, int centreZ) {
+                                                int selfHalfSpan, int centreX, int centreZ) {
         ChunkGeneratorStructureState state = ctx.state();
         long seed = state.getLevelSeed();
         List<Conflict> conflicts = new ArrayList<>();
@@ -226,7 +245,8 @@ public final class SpacingEngine {
             if (n.spacing() < SHConfig.minNeighbourSpacing.get()) continue;
             if (rules.compareOrder(selfHolder, selfId, n.holder(), n.id(), seed) >= 0) continue;
 
-            int required = rules.requiredDistance(selfHolder, selfId, n.holder(), n.id());
+            int required = rules.requiredDistance(selfHolder, selfId, n.holder(), n.id(),
+                    selfHalfSpan, StructureSizes.halfSpan(n.id()));
             if (required <= 0) continue;
             int scanChunks = Math.min(16, (required >> 4) + 2);
 
@@ -266,28 +286,6 @@ public final class SpacingEngine {
         double dx = ax - bx;
         double dz = az - bz;
         return Math.sqrt(dx * dx + dz * dz);
-    }
-
-    /**
-     * Vertical correction so a structure moved sideways still meets the ground.
-     * Returns Integer.MIN_VALUE when the height difference is too large to be worth doing,
-     * which makes the caller try a different direction.
-     */
-    private static int verticalCorrection(SHContext.Ctx ctx, Structure structure,
-                                          int oldX, int oldZ, int newX, int newZ) {
-        if (!SHConfig.followTerrainHeight.get()) return 0;
-        if (structure.step() != GenerationStep.Decoration.SURFACE_STRUCTURES) return 0;
-        try {
-            int oldGround = ctx.generator().getBaseHeight(oldX, oldZ, Heightmap.Types.WORLD_SURFACE_WG,
-                    ctx.heightAccessor(), ctx.state().randomState());
-            int newGround = ctx.generator().getBaseHeight(newX, newZ, Heightmap.Types.WORLD_SURFACE_WG,
-                    ctx.heightAccessor(), ctx.state().randomState());
-            int dy = newGround - oldGround;
-            if (Math.abs(dy) > SHConfig.maxVerticalShift.get()) return Integer.MIN_VALUE;
-            return dy;
-        } catch (Throwable t) {
-            return 0;
-        }
     }
 
     /** Approximate: does this structure's biome list allow the biome at this spot? */

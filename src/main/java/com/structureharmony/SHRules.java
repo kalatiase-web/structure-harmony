@@ -166,9 +166,14 @@ public final class SHRules {
             return matchesAny(pinned, holder, id);
         }
 
-        /** Required centre-to-centre distance in blocks between two structures. */
+        /**
+         * Required centre-to-centre distance in blocks, given each structure's measured half-span.
+         * In EDGE_TO_EDGE mode the footprints are added on so that minSeparation is a genuine
+         * clear gap, which is what stops smaller structures landing inside a very large one.
+         */
         public int requiredDistance(@Nullable Holder<Structure> ha, ResourceLocation a,
-                                    @Nullable Holder<Structure> hb, ResourceLocation b) {
+                                    @Nullable Holder<Structure> hb, ResourceLocation b,
+                                    int halfSpanA, int halfSpanB) {
             int bestSpec = -1;
             int pair = -1;
             for (PairRule p : pairs) {
@@ -179,8 +184,13 @@ public final class SHRules {
                 if (spec > bestSpec) { bestSpec = spec; pair = p.distance(); }
             }
             if (pair >= 0) return pair;
-            int sum = radius(ha, a) + radius(hb, b);
-            return Math.max(SHConfig.minSeparation.get(), sum) + SHConfig.extraBuffer.get();
+
+            int padding = radius(ha, a) + radius(hb, b);
+            int footprints = Math.max(0, halfSpanA) + Math.max(0, halfSpanB);
+            if (SHConfig.separationMode.get() == SHConfig.SeparationMode.EDGE_TO_EDGE) {
+                return SHConfig.minSeparation.get() + footprints + padding + SHConfig.extraBuffer.get();
+            }
+            return Math.max(SHConfig.minSeparation.get(), footprints + padding) + SHConfig.extraBuffer.get();
         }
 
         /**

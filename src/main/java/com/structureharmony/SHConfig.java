@@ -19,6 +19,13 @@ public final class SHConfig {
 
     public static ForgeConfigSpec.BooleanValue enabled;
     public static ForgeConfigSpec.IntValue minSeparation;
+    public static ForgeConfigSpec.EnumValue<SeparationMode> separationMode;
+    public static ForgeConfigSpec.IntValue assumedHalfSpan;
+    public static ForgeConfigSpec.BooleanValue avoidWater;
+    public static ForgeConfigSpec.IntValue waterDepthTolerance;
+    public static ForgeConfigSpec.IntValue footprintSamples;
+    public static ForgeConfigSpec.IntValue maxExtraRelief;
+    public static ForgeConfigSpec.IntValue siteCheckBudget;
     public static ForgeConfigSpec.IntValue extraBuffer;
     public static ForgeConfigSpec.IntValue maxShift;
     public static ForgeConfigSpec.BooleanValue followTerrainHeight;
@@ -40,6 +47,8 @@ public final class SHConfig {
     public static ForgeConfigSpec.BooleanValue logMoves;
     public static ForgeConfigSpec.IntValue historySize;
 
+    public enum SeparationMode { EDGE_TO_EDGE, CENTRE_TO_CENTRE }
+
     static {
         ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
 
@@ -53,8 +62,43 @@ public final class SHConfig {
 
         enabled = b.define("enabled", true);
 
-        minSeparation = b.comment("Minimum distance in BLOCKS between the centres of two different structures.")
+        minSeparation = b.comment("Minimum distance in BLOCKS between two different structures.",
+                                  "With the default separationMode this is measured between the EDGES of their",
+                                  "bounding boxes, so a 300 block structure really does keep everything 100 blocks",
+                                  "clear of it rather than 100 blocks from its centre.")
                          .defineInRange("minSeparation", 100, 0, 512);
+
+        separationMode = b.comment("EDGE_TO_EDGE   - minSeparation is the clear gap between the two footprints.",
+                                   "CENTRE_TO_CENTRE - minSeparation is measured centre to centre, so large",
+                                   "structures can still be clipped into. Only use this if EDGE_TO_EDGE spreads",
+                                   "things out more than you want.")
+                          .defineEnum("separationMode", SeparationMode.EDGE_TO_EDGE);
+
+        assumedHalfSpan = b.comment("Footprint sizes are learned from structures as they generate. Until a structure",
+                                    "has been seen at least once, this stands in for half its width, in blocks.")
+                           .defineInRange("assumedHalfSpan", 24, 0, 256);
+
+        avoidWater = b.comment("Never move a land structure onto water. A pond inside a plains biome is still the",
+                               "plains biome, so the biome check alone does not catch it - this compares the surface",
+                               "height against the solid floor instead. Structures that already stood in water",
+                               "(shipwrecks, ocean ruins) are still allowed to move within it.")
+                      .define("avoidWater", true);
+
+        waterDepthTolerance = b.comment("Blocks of fluid above the solid floor before a column counts as water.")
+                               .defineInRange("waterDepthTolerance", 2, 1, 32);
+
+        footprintSamples = b.comment("Ground is sampled on an N x N grid across the footprint rather than at the centre",
+                                     "point, which is what catches a destination that is flat in the middle and a cliff",
+                                     "at the corner. Higher is more accurate and slower.")
+                            .defineInRange("footprintSamples", 3, 2, 8);
+
+        maxExtraRelief = b.comment("Do not move a structure somewhere whose ground is this many blocks more uneven",
+                                   "than where it already stood. Keeps a build from being shifted onto a slope and",
+                                   "ending up with terrain cutting through it.")
+                          .defineInRange("maxExtraRelief", 4, 0, 64);
+
+        siteCheckBudget = b.comment("Max destinations whose ground is sampled per conflict. Performance guard.")
+                           .defineInRange("siteCheckBudget", 24, 4, 256);
 
         extraBuffer = b.comment("Extra blocks added on top of every required distance.")
                        .defineInRange("extraBuffer", 0, 0, 512);
@@ -110,20 +154,11 @@ public final class SHConfig {
         searchDirections = b.comment("How many evenly spaced directions are tried when looking for somewhere to move to.")
                             .defineInRange("searchDirections", 16, 4, 64);
 
-        radiusOverrides = b.comment("Per-structure radius in BLOCKS. Required distance between two structures is",
-                                    "max(minSeparation, radiusA + radiusB) + extraBuffer, so this is for things that",
-                                    "need more room than the global minimum.")
-                           .defineList("radiusOverrides", List.of(
-                                   "minecraft:mansion=90",
-                                   "minecraft:monument=80",
-                                   "minecraft:ancient_city=90",
-                                   "minecraft:village_plains=60",
-                                   "minecraft:village_desert=60",
-                                   "minecraft:village_savanna=60",
-                                   "minecraft:village_snowy=60",
-                                   "minecraft:village_taiga=60",
-                                   "minecraft:pillager_outpost=50"
-                           ), SHConfig::isSelectorEntry);
+        radiusOverrides = b.comment("EXTRA padding in blocks for a structure, on top of its own measured footprint.",
+                                    "Normally leave this empty: real footprint sizes are measured automatically, so",
+                                    "there is no list to keep up to date for modded structures. Use it only to give",
+                                    "something more breathing room than its bounding box implies.")
+                           .defineList("radiusOverrides", List.of(), SHConfig::isSelectorEntry);
 
         priorityOverrides = b.comment("Higher priority stays put; the lower one is the one that moves. Default 0",
                                       "(minecraft: structures get -10 while preferModdedOverVanilla is true).",

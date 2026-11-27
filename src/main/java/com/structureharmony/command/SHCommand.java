@@ -7,6 +7,7 @@ import com.structureharmony.SHRules;
 import com.structureharmony.SHStats;
 import com.structureharmony.spacing.Displacer;
 import com.structureharmony.spacing.SpacingEngine;
+import com.structureharmony.spacing.StructureSizes;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.ResourceLocationArgument;
@@ -41,6 +42,8 @@ public final class SHCommand {
                                 .executes(ctx -> distance(ctx.getSource(),
                                         ResourceLocationArgument.getId(ctx, "a"),
                                         ResourceLocationArgument.getId(ctx, "b"))))));
+
+        root.then(Commands.literal("sizes").executes(ctx -> sizes(ctx.getSource())));
 
         root.then(Commands.literal("reset").executes(ctx -> {
             SHStats.reset();
@@ -128,16 +131,23 @@ public final class SHCommand {
 
         SHRules.Parsed rules = SHRules.get();
         long seed = level.getSeed();
-        int required = rules.requiredDistance(ha, a, hb, b);
+        int halfA = StructureSizes.halfSpan(a);
+        int halfB = StructureSizes.halfSpan(b);
+        int required = rules.requiredDistance(ha, a, hb, b, halfA, halfB);
         int order = rules.compareOrder(ha, a, hb, b, seed);
         String mover = order < 0 ? a.toString() : b.toString();
 
         source.sendSuccess(() -> Component.literal(String.format(
-                "%s (radius %d, priority %d) vs %s (radius %d, priority %d)",
-                a, rules.radius(ha, a), rules.priority(ha, a),
-                b, rules.radius(hb, b), rules.priority(hb, b))), false);
-        source.sendSuccess(() -> Component.literal(
-                "required distance: " + required + " blocks"), false);
+                "%s (half-span %d%s, padding %d, priority %d)",
+                a, halfA, StructureSizes.isKnown(a) ? " measured" : " ASSUMED - not seen yet",
+                rules.radius(ha, a), rules.priority(ha, a))), false);
+        source.sendSuccess(() -> Component.literal(String.format(
+                "%s (half-span %d%s, padding %d, priority %d)",
+                b, halfB, StructureSizes.isKnown(b) ? " measured" : " ASSUMED - not seen yet",
+                rules.radius(hb, b), rules.priority(hb, b))), false);
+        source.sendSuccess(() -> Component.literal(String.format(
+                "required centre-to-centre distance: %d blocks (%s, gap %d)",
+                required, SHConfig.separationMode.get(), SHConfig.minSeparation.get())), false);
 
         if (rules.ignored(ha, a) || rules.ignored(hb, b)) {
             source.sendSuccess(() -> Component.literal(
@@ -154,6 +164,25 @@ public final class SHCommand {
                 Math.min(rules.maxShift(ha, a), rules.maxShift(hb, b)),
                 Displacer.SAFE_CHUNK_RADIUS * 16)), false);
         return required;
+    }
+
+    /** The learned footprint cache - the numbers the separation distances are actually built on. */
+    private static int sizes(CommandSourceStack source) {
+        Map<String, Integer> sizes = StructureSizes.snapshot();
+        if (sizes.isEmpty()) {
+            source.sendSuccess(() -> Component.literal(
+                    "No footprints measured yet. Sizes are learned as structures generate; until then "
+                    + SHConfig.assumedHalfSpan.get() + " blocks is assumed for each."), false);
+            return 0;
+        }
+        List<Map.Entry<String, Integer>> rows = new ArrayList<>(sizes.entrySet());
+        rows.sort((x, y) -> Integer.compare(y.getValue(), x.getValue()));
+        source.sendSuccess(() -> Component.literal("measured half-spans (blocks), largest first:"), false);
+        for (Map.Entry<String, Integer> row : rows) {
+            String line = row.getKey() + ": " + row.getValue();
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return rows.size();
     }
 
     private SHCommand() {}

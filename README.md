@@ -38,12 +38,22 @@ terrain adaptation gets **vanilla's own** terrain shaping applied at its new pos
    walked.
 2. Work out the direction straight away from the conflict, then try evenly spaced directions
    outward from it, smallest move first.
-3. Accept the first move that clears every conflict, keeps the structure inside its own biome
-   list, and needs no absurd vertical correction.
-4. Apply a vertical correction from the ground-height difference between the old and new spot,
-   so a structure moved sideways still meets the ground.
-5. If nothing clears it, apply the best partial improvement and **generate the structure
-   anyway**, counted as `unresolved`.
+3. Check the destination is somewhere the structure could actually stand, by sampling ground
+   columns on a grid across its whole footprint: not on water, and not meaningfully more uneven
+   than where it already stood.
+4. Level it with a vertical correction taken from the *median solid-ground* height across that
+   footprint, so one high corner cannot bury the whole building.
+5. Accept the first move that clears every conflict and passes all of the above.
+6. If nothing clears it, apply the best partial improvement — which still has to pass those
+   checks — and **generate the structure anyway**, counted as `unresolved`.
+
+### Sizes are measured, not listed
+
+Required distances are built on each structure's **real bounding box**, measured as structures
+generate and cached per session. There is no radius list to keep up to date, so a 300-block
+modded structure reserves room for its actual footprint rather than being treated as a point.
+`minSeparation` is a genuine clear gap between footprints, not a centre-to-centre figure.
+`/structureharmony sizes` shows what has been measured so far.
 
 Priority ties are broken by a seed-derived hash, so the outcome is stable per world but not
 biased toward whichever mod id sorts first.
@@ -88,9 +98,16 @@ All distances are in **blocks**. Selector syntax, most specific wins:
 
 Key settings:
 
-- `minSeparation = 100` — minimum centre-to-centre distance between two different structures.
-- `radiusOverrides` — per-structure room requirement; required distance is
-  `max(minSeparation, radiusA + radiusB) + extraBuffer`.
+- `minSeparation = 100` — the clear gap between two structures' footprints (see `separationMode`).
+- `separationMode = EDGE_TO_EDGE` — footprint sizes are added on, so large structures genuinely
+  keep others clear of them. `CENTRE_TO_CENTRE` is the looser old behaviour.
+- `assumedHalfSpan = 24` — stands in for a structure's half-width until one has been seen.
+- `avoidWater = true`, `waterDepthTolerance = 2` — never move a land structure onto water.
+  Structures that already stood in water may still move within it.
+- `footprintSamples = 3` — N×N ground samples across the footprint; raise for accuracy.
+- `maxExtraRelief = 4` — refuse a destination whose ground is this much more uneven than the
+  original. This is the setting that stops moves onto slopes.
+- `radiusOverrides` — *extra* padding beyond the measured footprint. Normally leave empty.
 - `priorityOverrides` — higher stays put, lower moves. Vanilla gets −10 while
   `preferModdedOverVanilla` is on, so **your structures hold their ground and vanilla moves**.
 - `pairOverrides` — `"a|b=blocks"` for one pair; `=0` lets a pair sit together (villages and
@@ -113,6 +130,7 @@ Datapack tags: `#structureharmony:no_spacing`, `#structureharmony:never_reject`.
 /structureharmony report                 per-structure attempts = placed + moved + unresolved
 /structureharmony why <structure>        last 10 moves, with shift applied and distance achieved
 /structureharmony distance <a> <b>       required gap, which one moves, and its movement budget
+/structureharmony sizes                  measured footprint half-spans
 /structureharmony reset                  clear counters
 /structureharmony reload                 re-read config without restarting
 ```
@@ -138,6 +156,14 @@ spawn chunks, fails on any mixin error or resolver exception, and attaches the j
 ## Known limits
 
 - **Already-generated chunks are untouched.** Only newly generated chunks are affected.
+- **The size cache warms up.** A structure's footprint is only known once one has generated, so
+  in the first few hundred chunks of a brand-new world `assumedHalfSpan` is used instead and
+  separation around an unseen huge structure can be too small. It corrects itself as the world
+  grows, and raising `assumedHalfSpan` trades early over-separation for early clipping.
+- **Terrain cutting into a structure that was NOT moved is vanilla behaviour**, and this mod does
+  not address it — terrain blending was deliberately removed. The ground checks above only stop
+  *this mod's own moves* from making the fit worse. `/structureharmony why <id>` tells you
+  whether a given structure was actually moved, which is how to tell the two cases apart.
 - **Large structures barely move.** See the table above — this is an engine limit.
 - `/locate structure` reports the position of the chunk that *owns* a structure, so after a
   displacement it can be off by up to the shift distance.
