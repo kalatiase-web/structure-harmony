@@ -1,7 +1,7 @@
 package com.structureharmony.spacing;
 
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.levelgen.structure.ChunkGeneratorStructureState;
+import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement;
 import net.minecraft.world.level.levelgen.structure.placement.RandomSpreadStructurePlacement;
 import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;

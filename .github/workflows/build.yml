@@ -38,6 +38,21 @@ jobs:
           ./gradlew build --no-daemon --stacktrace 2>&1 | tee build.log
         continue-on-error: true
 
+      # When javac cannot resolve a class, print where that class actually lives in the
+      # Minecraft jar, so a wrong import is fixed in one round trip instead of by guessing.
+      - name: Locate unresolved classes
+        if: steps.build.outcome != 'success'
+        shell: bash
+        run: |
+          names=$(grep -oP 'symbol:\s+class \K\w+' build.log 2>/dev/null | sort -u)
+          [ -z "$names" ] && echo "no unresolved classes" && exit 0
+          jars=$(find ~/.gradle/caches -name '*.jar' 2>/dev/null | grep -iE 'forge|minecraft|client|joined' | head -60)
+          for c in $names; do
+            echo "### $c"
+            for j in $jars; do unzip -l "$j" 2>/dev/null | grep -E "/${c}\.class$" | awk '{print $NF}'; done \
+              | sed 's#/#.#g; s#\.class$##' | sort -u | head -5
+          done
+
       - name: Tail of build log
         if: always()
         run: tail -n 120 build.log || true

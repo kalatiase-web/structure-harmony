@@ -3,7 +3,7 @@ package com.structureharmony;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.chunk.ChunkGenerator;
-import net.minecraft.world.level.levelgen.structure.ChunkGeneratorStructureState;
+import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 
 import javax.annotation.Nullable;
 
