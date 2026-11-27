@@ -1,5 +1,7 @@
 # Structure Harmony — Forge 1.20.1
 
+**[Download the latest jar](https://github.com/kalatiase-web/structure-harmony/releases/latest)** — drop it in `mods/`. Config is written to `config/structureharmony-common.toml` on first launch.
+
 Two features, no overlap with each other:
 
 1. **Spacing** — stops structures from different mods (and vanilla) generating on top of or right next to each other.
@@ -36,6 +38,10 @@ On top of that:
 ./gradlew runClient      # test in-game
 ```
 Requires JDK 17. Targets Forge 47.3.0 / MC 1.20.1 — bump `forge_version` in `gradle.properties` if your pack uses another build.
+
+CI builds every push and attaches the jar to a release. It also boots a dedicated
+server and generates spawn chunks, failing the build on any mixin error — the step
+runs the server out to a 10-minute cap, so a full pipeline takes ~13 minutes.
 
 ---
 
@@ -98,5 +104,6 @@ Every `*Overrides` list shares one selector syntax, most specific wins:
 - **The fail-open valve is order-dependent** by nature (it counts what actually happened). Counters are per-seed and reset on restart. Set `failOpenRatio = 1.0` for fully deterministic spacing.
 - **Blending uses the structure's bounding box**, which for a build with a deep basement extends well below the visible floor. That's what `anchorOffset` and the per-structure overrides are for; `#structureharmony:no_smoothing` is the escape hatch.
 - **Modded ground blocks**: new ground is built by copying the blocks already in the column, so it adapts to any biome. *Carving through* an unrecognised block is refused on purpose, so another mod's build is never eaten — if a modded stone won't carve, add it to `#structureharmony:terrain` (preferred) or set `carveUnknownBlocks = true`.
-- **Mixin targets**: `ChunkGenerator#createStructures`, `ChunkGenerator#applyBiomeDecoration`, `StructureManager#setStartForStructure`. All three are soft (`defaultRequire: 0`) — if another mod replaces one, that feature goes quiet instead of crashing the game. Worth a sanity check against other worldgen-heavy mods in your pack.
-- **Untested at runtime.** This has not been compiled against the Forge/MC artifacts or launched in-game yet — it needs a `./gradlew build` pass on your machine, and I'd expect a mapping or signature nit or two on first compile.
+- **Mixin targets**: `ChunkGenerator#createStructures`, `ChunkGenerator#applyBiomeDecoration`, `StructureManager#setStartForStructure`. All three are `require = 1`, which means **if another mod overwrites one of those methods, the game fails at startup** with a mixin error naming the method, rather than loading and silently doing nothing. That is deliberate — a spacing mod that quietly no-ops is the worst outcome. If you hit it in a pack and want the mod to stand down instead, drop `require = 1` from the injection in question and rebuild.
+- `/structureharmony report` prints `hooks: spacing active, blending active` once chunks have generated. If either says `not seen yet` after exploring new terrain, that feature is not running.
+- **Verified so far**: compiles against Forge 47.3.0/MC 1.20.1, mixins apply (confirmed by a dedicated server booting to `Done` with spawn chunks generated), refmap resolves all three targets. **Not yet verified**: the actual in-world look of blended terrain and the spacing distances in a populated modpack. Those need play-testing with your own structures — start with `anchorOffset` and the `radiusOverrides` numbers.
