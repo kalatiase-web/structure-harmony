@@ -20,9 +20,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Cache Gradle and ForgeGradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Build
         id: build
-        run: ./gradlew build --no-daemon --stacktrace 2>&1 | tee build.log
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew build --no-daemon --stacktrace 2>&1 | tee build.log
         continue-on-error: true
 
       - name: Tail of build log
