@@ -144,7 +144,8 @@ public final class SpacingEngine {
         } else if (fitOnly) {
             // No conflict was involved, so this is a fit adjustment whether or not the ground
             // turned out to be perfect. UNRESOLVED is reserved for separation that fell short.
-            outcome = best.moved() ? Outcome.FITTED : Outcome.ALLOW;
+            boolean shifted = best.dx() != 0 || best.dy() != 0 || best.dz() != 0;
+            outcome = shifted ? Outcome.FITTED : Outcome.ALLOW;
         } else {
             outcome = Outcome.MOVED;
         }
