@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.structureharmony.command.SHCommand;
 import com.structureharmony.spacing.SpacingEngine;
 import com.structureharmony.spacing.StructureSizes;
+import com.structureharmony.spacing.StructureTraits;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
@@ -43,5 +44,6 @@ public final class StructureHarmony {
     public void onServerStopped(ServerStoppedEvent event) {
         SHStats.reset();
         StructureSizes.reset();
+        StructureTraits.reset();
     }
 }

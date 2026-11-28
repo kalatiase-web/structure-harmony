@@ -17,10 +17,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class SHStats {
 
     public record Entry(AtomicInteger attempts, AtomicInteger placed, AtomicInteger moved,
-                        AtomicInteger unresolved, AtomicInteger cancelled) {
+                        AtomicInteger fitted, AtomicInteger unresolved, AtomicInteger cancelled) {
         public Entry() {
             this(new AtomicInteger(), new AtomicInteger(), new AtomicInteger(),
-                 new AtomicInteger(), new AtomicInteger());
+                 new AtomicInteger(), new AtomicInteger(), new AtomicInteger());
         }
     }
 
@@ -43,6 +43,7 @@ public final class SHStats {
     public static void placed(ResourceLocation id) { entry(id).placed().incrementAndGet(); }
 
     public static void moved(ResourceLocation id) { entry(id).moved().incrementAndGet(); }
+    public static void fitted(ResourceLocation id) { entry(id).fitted().incrementAndGet(); }
     public static void unresolved(ResourceLocation id) { entry(id).unresolved().incrementAndGet(); }
     public static void cancelled(ResourceLocation id) { entry(id).cancelled().incrementAndGet(); }
 

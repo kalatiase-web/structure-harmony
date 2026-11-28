@@ -45,6 +45,18 @@ public final class SHConfig {
     public static ForgeConfigSpec.ConfigValue<List<? extends String>> ignored;
     public static ForgeConfigSpec.ConfigValue<List<? extends String>> pinned;
 
+    public static ForgeConfigSpec.BooleanValue fitCorrection;
+    public static ForgeConfigSpec.IntValue maxRelief;
+    public static ForgeConfigSpec.IntValue maxFitVerticalShift;
+    public static ForgeConfigSpec.BooleanValue liftOutOfTerrain;
+    public static ForgeConfigSpec.BooleanValue preferHigherGround;
+    public static ForgeConfigSpec.IntValue floatingDetectGap;
+    public static ForgeConfigSpec.BooleanValue aquaticFromBiomes;
+    public static ForgeConfigSpec.BooleanValue keepLandStructuresOutOfWater;
+    public static ForgeConfigSpec.ConfigValue<List<? extends String>> floating;
+    public static ForgeConfigSpec.ConfigValue<List<? extends String>> aquatic;
+    public static ForgeConfigSpec.ConfigValue<List<? extends String>> noFitCorrection;
+
     public static ForgeConfigSpec.BooleanValue logMoves;
     public static ForgeConfigSpec.IntValue historySize;
 
@@ -198,6 +210,66 @@ public final class SHConfig {
                            "from. Use this for anything position-critical. #structureharmony:never_reject does",
                            "the same thing.")
                   .defineList("pinned", List.of(), SHConfig::isSelector);
+
+        b.pop();
+
+        b.comment("Checks every structure against the ground it is about to be built on, not just the",
+                  "ones involved in a collision: is it on a slope that will cut through it, is it",
+                  "hanging in the air, is a land structure sitting in the sea. A structure that fails is",
+                  "moved to the best spot available within its displacement budget, preferring flat",
+                  "ground - which is what 'put it on top of the mountain instead of the slope' means in",
+                  "practice.",
+                  "",
+                  "IMPORTANT: all of this rests on ChunkGenerator#getBaseHeight, the engine's own",
+                  "prediction of ground height before terrain exists. A terrain mod whose final ground",
+                  "does not match that prediction will defeat these checks no matter what they do here.").push("fit");
+
+        fitCorrection = b.define("enabled", true);
+
+        maxRelief = b.comment("Ground height spread across the footprint, in blocks, above which a site counts as",
+                              "too uneven to build on.")
+                     .defineInRange("maxRelief", 8, 1, 64);
+
+        maxFitVerticalShift = b.comment("Largest vertical correction allowed when fixing a fit (as opposed to when following",
+                                        "terrain after a sideways move).")
+                               .defineInRange("maxFitVerticalShift", 48, 0, 256);
+
+        liftOutOfTerrain = b.comment("Raise a structure so its base clears the highest ground under its footprint. This is",
+                                     "what stops terrain cutting through the lower courses. The trade-off is that on very",
+                                     "uneven ground the low side can end up with a gap beneath it - with terrain blending",
+                                     "removed there is nothing to fill that in, so turn this off if you would rather have",
+                                     "buried walls than an overhang.")
+                            .define("liftOutOfTerrain", true);
+
+        preferHigherGround = b.comment("When several destinations are equally flat, prefer the higher one, so a structure",
+                                       "displaced off a slope tends to end up on the shoulder or summit rather than the foot.")
+                              .define("preferHigherGround", true);
+
+        floatingDetectGap = b.comment("If a structure's base already sits this many blocks above the ground beneath it, it is",
+                                      "assumed to be deliberately floating and is left completely alone by the fit checks.",
+                                      "Also list such structures in 'floating' or tag them #structureharmony:floating, which",
+                                      "is more reliable than this guess.")
+                             .defineInRange("floatingDetectGap", 6, 1, 128);
+
+        floating = b.comment("Structures that are meant to hang in the air. Never ground-fitted, never lifted, never",
+                             "pulled out of water. They still take part in spacing.")
+                    .defineList("floating", List.of(), SHConfig::isSelector);
+
+        aquatic = b.comment("Structures that are meant to be in water. Never pulled onto land.")
+                   .defineList("aquatic", List.of(), SHConfig::isSelector);
+
+        aquaticFromBiomes = b.comment("Treat a structure as aquatic automatically if its own biome list contains ocean or",
+                                      "river biomes. Catches shipwrecks, ocean ruins, monuments and modded equivalents",
+                                      "without a list to maintain.")
+                             .define("aquaticFromBiomes", true);
+
+        keepLandStructuresOutOfWater = b.comment("Move a structure that is neither aquatic nor floating out of water onto land.",
+                                                 "If no land is reachable within its budget it is still generated where it was -",
+                                                 "nothing is deleted - so a stranded one can remain. Check /structureharmony report.")
+                                        .define("keepLandStructuresOutOfWater", true);
+
+        noFitCorrection = b.comment("Structures excluded from fit checking entirely.")
+                           .defineList("noFitCorrection", List.of(), SHConfig::isSelector);
 
         b.pop();
 

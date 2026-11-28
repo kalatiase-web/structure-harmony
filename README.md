@@ -149,7 +149,7 @@ Datapack tags: `#structureharmony:no_spacing`, `#structureharmony:never_reject`.
 ```
 `/sharmony` is an alias.
 
-`report` is the honesty check: `attempts` should equal `placed + moved + unresolved`, and the
+`report` is the honesty check: `attempts` should equal `placed + moved + fitted + unresolved`, and the
 `cancelled` column should stay absent. A non-zero `cancelled` is the only way this mod can cost
 you a structure, and it only happens if you turned `cancelWhenCannotMove` on.
 
@@ -165,6 +165,57 @@ JDK 17, Forge 47.3.0 / MC 1.20.1. CI builds every push, boots a dedicated server
 spawn chunks, fails on any mixin error or resolver exception, and attaches the jar to a release.
 
 ---
+
+## Fitting structures to the ground
+
+Every structure is checked against the ground it is about to stand on, not just the ones in a
+collision: a slope that would cut through it, a base hanging in the air, a land structure sitting
+in the sea. A structure that fails is moved to the best spot inside its displacement budget, with
+flatter and higher ground preferred — which is what "put it on the shoulder of the mountain
+instead of the slope" amounts to in practice. Staying put is always one of the candidates, so a
+structure is only moved when moving genuinely scores better.
+
+Spacing and fit are scored together rather than in sequence, because they compete: the flattest
+spot nearby may be the one closest to a village.
+
+- `[fit] maxRelief = 8` — ground spread across the footprint above which a site is "too uneven".
+- `liftOutOfTerrain = true` — raise a structure until its base clears the highest ground beneath
+  it. This is the main defence against terrain cutting through walls now that blending is gone.
+  The trade-off is a possible gap under the low side, with nothing to fill it — turn it off if you
+  would rather have buried walls than an overhang.
+- `preferHigherGround = true` — bounded tiebreak toward higher ground, never the dominant term.
+- `keepLandStructuresOutOfWater = true` — a non-aquatic structure in water is moved to land.
+
+### Floating and underwater structures are protected
+
+Structures meant to hang in the air are never ground-fitted, lifted or pulled out of water:
+
+- tag `#structureharmony:floating`, or the `[fit] floating` config list — **use these for modpack
+  structures that are supposed to float**; they are reliable where the guess below is not.
+- automatic guess: a base already sitting `floatingDetectGap` (6) blocks clear of the ground is
+  assumed to be floating on purpose.
+
+Structures meant to be in water are never dragged onto land: tag `#structureharmony:aquatic`, the
+`aquatic` list, or — with `aquaticFromBiomes` on — any structure whose own biome list includes
+ocean or river biomes. That covers shipwrecks, ocean ruins, monuments and modded equivalents
+without a list to maintain.
+
+## Terrain mods that move the ground after predicting it
+
+The fit checks, vanilla's own structure placement, and every other mod that asks "how high is the
+ground here" all go through `ChunkGenerator#getBaseHeight`, which predicts ground height **before
+any terrain exists**. If a terrain mod's finished ground does not match that prediction, structures
+will float or be buried and nothing done at placement time can prevent it — the position has to be
+chosen before the ground is built.
+
+Hydrological 0.15.3 is a concrete example. It soft-overwrites `NoiseBasedChunkGenerator#doFill`
+(inject + cancel, full reimplementation) and ships a custom `to_heightmap` density function that
+memoises column heights in a process-global, mutable, unsynchronised `Long2DoubleOpenHashMap`. A
+height query therefore depends on what has already been computed and cached, so the answer given
+before an area generates need not match the terrain that later appears there. That map is also
+written from multiple chunk-generation worker threads without synchronisation, which is a
+thread-safety hazard in its own right. Structures floating or clipped under that mod are not
+something this mod can correct.
 
 ## Known limits
 

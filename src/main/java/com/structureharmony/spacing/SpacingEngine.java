@@ -29,21 +29,25 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * Conflict resolution by displacement.
+ * Decides where a structure actually ends up.
  *
- * When a structure would generate too close to a higher priority one, it is MOVED aside rather
- * than dropped. That distinction is the whole design: vanilla gives a structure exactly one
- * candidate chunk per spacing cell, so cancelling that candidate does not push the structure to
- * a nearby spot - the next cell is a whole spacing period away (34 chunks for villages), which
- * means the structure is gone from the entire region. Rejection cannot be tuned into something
- * reasonable; it has to be replaced.
+ * One scored search answers both questions at once - "is it too close to something" and "does it
+ * fit the ground it is standing on" - because they compete: the flattest spot may be the one
+ * nearest a village. Candidates include staying put, so a structure is only moved when moving
+ * genuinely scores better than not moving.
  *
- * A structure is only ever cancelled if the user explicitly turns cancelWhenCannotMove on.
- * Otherwise an unsolvable conflict generates where it stood and is counted as unresolved.
+ * Conflicts are resolved by moving, never by deleting. Vanilla gives a structure one candidate
+ * chunk per spacing cell, so cancelling a placement removes it from the whole region rather than
+ * nudging it aside.
+ *
+ * EVERYTHING HERE DEPENDS ON ChunkGenerator#getBaseHeight, the engine's prediction of ground
+ * height made before any terrain exists. A terrain mod whose final ground does not match that
+ * prediction defeats these checks however carefully they are written, because the structure's
+ * position has to be chosen before the ground it stands on has been built.
  */
 public final class SpacingEngine {
 
-    public enum Outcome { ALLOW, MOVED, UNRESOLVED, CANCELLED }
+    public enum Outcome { ALLOW, MOVED, FITTED, UNRESOLVED, CANCELLED }
 
     /** gap / targetGap are EDGE to edge, which is the number that actually describes an overlap. */
     public record Decision(Outcome outcome, @Nullable ResourceLocation other,
@@ -58,6 +62,10 @@ public final class SpacingEngine {
                              int radius, int spacing) {}
 
     private record View(List<Neighbour> neighbours, int rulesVersion) {}
+
+    /** A destination under consideration. Lower score is better; staying put is one of these. */
+    private record Candidate(int dx, int dy, int dz, double score, double violation, double gap, double targetGap,
+                             @Nullable ResourceLocation other, boolean fitProblem) {}
 
     private static final Map<ChunkGeneratorStructureState, View> VIEWS =
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -79,58 +87,83 @@ public final class SpacingEngine {
         Holder<Structure> selfHolder = holderOf(registry, structure);
 
         SHRules.Parsed rules = SHRules.get();
-
         BoundingBox box = Displacer.boxOf(start);
         if (box == null) return Decision.ALLOW;
 
-        // Learn this structure's real footprint before anything else, so the size cache fills in
-        // even for structures that take no part in spacing themselves.
+        // Learn the real footprint before anything else, so the size cache fills in even for
+        // structures that take no part in spacing themselves.
         StructureSizes.observe(selfId, box);
         if (rules.ignored(selfHolder, selfId)) return Decision.ALLOW;
 
         SHStats.attempt(selfId);
 
+        int selfHalfSpan = StructureSizes.halfSpanOf(box);
         int centreX = (box.minX() + box.maxX()) / 2;
         int centreZ = (box.minZ() + box.maxZ()) / 2;
 
-        int selfHalfSpan = StructureSizes.halfSpanOf(box);
+        boolean surfaceStep = structure.step() == GenerationStep.Decoration.SURFACE_STRUCTURES;
+        SiteCheck.Site origin = surfaceStep ? SiteCheck.sample(ctx, box, 0, 0) : null;
+
+        boolean floating = StructureTraits.isFloating(selfHolder, selfId, rules, box.minY(), origin);
+        boolean aquatic = StructureTraits.isAquatic(selfHolder, selfId, rules);
+        boolean fit = SHConfig.fitCorrection.get() && surfaceStep && origin != null
+                && !floating && !rules.noFit(selfHolder, selfId);
+
         List<Conflict> conflicts = findConflicts(ctx, rules, selfHolder, selfId, selfHalfSpan, centreX, centreZ);
-        if (conflicts.isEmpty()) {
+
+        boolean strandedInWater = fit && SHConfig.keepLandStructuresOutOfWater.get() && !aquatic && origin.water();
+        boolean onBadGround = fit && origin.relief() > SHConfig.maxRelief.get();
+
+        if (conflicts.isEmpty() && !strandedInWater && !onBadGround) {
+            // Nothing wrong horizontally. A lift may still be wanted so terrain does not cut in.
+            int dy = fit ? verticalFor(box, origin, origin, true) : 0;
+            if (dy != 0) {
+                SHStats.fitted(selfId);
+                return new Decision(Outcome.FITTED, null, 0, dy, 0, 0, 0);
+            }
             SHStats.placed(selfId);
             return Decision.ALLOW;
         }
 
-        Conflict worst = worstOf(conflicts, centreX, centreZ);
-        double before = distance(centreX, centreZ, worst.x(), worst.z());
-        double beforeGap = before - selfHalfSpan - worst.halfSpan();
+        Candidate best = search(ctx, structure, selfHolder, box, owner, conflicts, origin,
+                selfHalfSpan, centreX, centreZ,
+                Math.min(rules.maxShift(selfHolder, selfId), Displacer.SAFE_CHUNK_RADIUS * 16),
+                fit, aquatic);
 
-        // Pinned structures hold their ground; the other side of the conflict is what moves.
-        if (rules.pinned(selfHolder, selfId)) {
-            return finish(selfId, new Decision(Outcome.UNRESOLVED, worst.id(), 0, 0, 0,
-                    beforeGap, targetGap(worst, selfHalfSpan)));
+        return finish(selfId, toDecision(best, conflicts.isEmpty()));
+    }
+
+    private static Decision toDecision(@Nullable Candidate best, boolean fitOnly) {
+        if (best == null) {
+            Outcome outcome = SHConfig.cancelWhenCannotMove.get() ? Outcome.CANCELLED : Outcome.UNRESOLVED;
+            return new Decision(outcome, null, 0, 0, 0, 0, 0);
         }
-
-        // Bound only by the configured budget and the engine ceiling: every candidate is then
-        // tested against fitsReferenceWindow exactly, so no usable range is discarded up front.
-        int allowed = Math.min(rules.maxShift(selfHolder, selfId), Displacer.SAFE_CHUNK_RADIUS * 16);
-
-        Decision found = search(ctx, structure, selfHolder, box, owner, conflicts,
-                selfHalfSpan, centreX, centreZ, allowed);
-        if (found != null) return finish(selfId, found);
-
-        return finish(selfId, decideUnresolved(selfId, worst, 0, 0, 0, beforeGap, selfHalfSpan));
+        Outcome outcome;
+        if (best.violation() > 0 || best.fitProblem()) {
+            outcome = SHConfig.cancelWhenCannotMove.get() && best.violation() > 0
+                    ? Outcome.CANCELLED : Outcome.UNRESOLVED;
+        } else {
+            outcome = fitOnly ? Outcome.FITTED : Outcome.MOVED;
+        }
+        return new Decision(outcome, best.other(), best.dx(), best.dy(), best.dz(),
+                best.gap(), best.targetGap());
     }
 
     /**
-     * Tries evenly spaced directions, nearest to "straight away from the conflict" first, and
-     * returns the smallest move that clears every conflict while staying inside the engine's
-     * reference window, keeping the structure's own biome, and not needing an absurd vertical
-     * correction. Falls back to the best partial improvement if nothing fully clears.
+     * Scored search over staying put plus evenly spaced destinations, nearest to "straight away
+     * from the conflict" first. One score balances separation, water, ground evenness, how far the
+     * structure has to be lifted and how far it travels, so the three goals trade off against each
+     * other instead of one silently overriding the rest.
      */
     @Nullable
-    private static Decision search(SHContext.Ctx ctx, Structure structure, @Nullable Holder<Structure> selfHolder,
-                                   BoundingBox box, ChunkPos owner, List<Conflict> conflicts,
-                                   int selfHalfSpan, int centreX, int centreZ, int allowed) {
+    private static Candidate search(SHContext.Ctx ctx, Structure structure, @Nullable Holder<Structure> selfHolder,
+                                    BoundingBox box, ChunkPos owner, List<Conflict> conflicts,
+                                    @Nullable SiteCheck.Site origin, int selfHalfSpan,
+                                    int centreX, int centreZ, int allowed, boolean fit, boolean aquatic) {
+
+        Candidate best = evaluate(ctx, box, conflicts, origin, origin, 0, 0, selfHalfSpan,
+                centreX, centreZ, fit, aquatic);
+
         double awayX = 0, awayZ = 0;
         for (Conflict c : conflicts) {
             double ox = centreX - c.x();
@@ -144,15 +177,9 @@ public final class SpacingEngine {
         }
         double baseAngle = (awayX == 0 && awayZ == 0) ? 0 : Math.atan2(awayZ, awayX);
 
-        boolean surfaceStructure = structure.step() == GenerationStep.Decoration.SURFACE_STRUCTURES;
-        SiteCheck.Site origin = surfaceStructure ? SiteCheck.sample(ctx, box, 0, 0) : null;
-        int siteBudget = SHConfig.siteCheckBudget.get();
-
         int dirs = SHConfig.searchDirections.get();
         double step = (2 * Math.PI) / dirs;
-
-        Decision best = null;
-        double bestViolation = Double.MAX_VALUE;
+        int siteBudget = SHConfig.siteCheckBudget.get();
 
         for (int k = 0; k < dirs && siteBudget > 0; k++) {
             // 0, +1, -1, +2, -2 ... so directions closest to "straight away" are tried first.
@@ -166,64 +193,96 @@ public final class SpacingEngine {
                 int dz = (int) Math.round(uz * magnitude);
                 if (dx == 0 && dz == 0) continue;
                 if (!Displacer.fitsReferenceWindow(box, owner, dx, dz)) break;
+                if (SHConfig.keepBiome.get() && !biomeAllows(ctx, selfHolder, centreX + dx, centreZ + dz)) continue;
 
-                int newX = centreX + dx;
-                int newZ = centreZ + dz;
-                double violation = worstViolation(conflicts, newX, newZ);
-                if (violation >= bestViolation && violation > 0) continue;
-
-                if (SHConfig.keepBiome.get() && !biomeAllows(ctx, selfHolder, newX, newZ)) continue;
-
-                // Is the destination somewhere this thing could actually stand? Sampled across the
-                // whole footprint, because the centre column alone hides ponds and slopes.
-                int dy = 0;
-                if (origin != null) {
+                SiteCheck.Site site = origin;
+                if (fit || SHConfig.followTerrainHeight.get()) {
                     siteBudget--;
-                    SiteCheck.Site site = SiteCheck.sample(ctx, box, dx, dz);
+                    site = SiteCheck.sample(ctx, box, dx, dz);
                     if (site == null) continue;
-                    if (SHConfig.avoidWater.get() && site.water() && !origin.water()) continue;
-                    if (site.relief() > origin.relief() + SHConfig.maxExtraRelief.get()) continue;
-                    if (SHConfig.followTerrainHeight.get()) {
-                        dy = site.ground() - origin.ground();
-                        if (Math.abs(dy) > SHConfig.maxVerticalShift.get()) continue;
-                    }
                 }
 
-                Conflict worst = worstOf(conflicts, newX, newZ);
-                double gap = distance(newX, newZ, worst.x(), worst.z()) - selfHalfSpan - worst.halfSpan();
-                Decision candidate = new Decision(
-                        violation <= 0 ? Outcome.MOVED : Outcome.UNRESOLVED,
-                        worst.id(), dx, dy, dz, gap, targetGap(worst, selfHalfSpan));
-
-                if (violation <= 0) return candidate;   // smallest fully clearing move wins
-                bestViolation = violation;
-                best = candidate;
+                Candidate candidate = evaluate(ctx, box, conflicts, origin, site, dx, dz, selfHalfSpan,
+                        centreX, centreZ, fit, aquatic);
+                if (candidate == null) continue;
+                if (best == null || candidate.score() < best.score()) best = candidate;
             }
         }
         return best;
     }
 
-    private static Decision decideUnresolved(ResourceLocation selfId, Conflict worst,
-                                             int dx, int dy, int dz, double gap, int selfHalfSpan) {
-        Outcome outcome = SHConfig.cancelWhenCannotMove.get() ? Outcome.CANCELLED : Outcome.UNRESOLVED;
-        return new Decision(outcome, worst.id(), dx, dy, dz, gap, targetGap(worst, selfHalfSpan));
+    @Nullable
+    private static Candidate evaluate(SHContext.Ctx ctx, BoundingBox box, List<Conflict> conflicts,
+                                      @Nullable SiteCheck.Site origin, @Nullable SiteCheck.Site site,
+                                      int dx, int dz, int selfHalfSpan, int centreX, int centreZ,
+                                      boolean fit, boolean aquatic) {
+        int newX = centreX + dx;
+        int newZ = centreZ + dz;
+
+        int dy = 0;
+        if (site != null && origin != null) {
+            dy = verticalFor(box, origin, site, fit);
+            int cap = fit ? SHConfig.maxFitVerticalShift.get() : SHConfig.maxVerticalShift.get();
+            if (Math.abs(dy) > cap) return null;
+        }
+
+        double violation = worstViolation(conflicts, newX, newZ);
+        Conflict worst = conflicts.isEmpty() ? null : worstOf(conflicts, newX, newZ);
+
+        double score = Math.max(0, violation) * 1000.0;
+        boolean fitProblem = false;
+
+        if (fit && site != null) {
+            if (!aquatic && site.water()) {
+                score += 1_000_000.0;             // a land structure in the sea is the worst outcome
+                fitProblem = true;
+            }
+            int over = site.relief() - SHConfig.maxRelief.get();
+            if (over > 0) { score += over * 200.0; fitProblem = true; }
+            score += site.relief() * 2.0;          // mild preference for flatter ground generally
+            score += Math.abs(dy) * 2.0;
+            if (SHConfig.preferHigherGround.get() && origin != null) {
+                // Bounded, so "on top of the slope" is a tiebreak and never the dominant term.
+                score -= Math.min(48, Math.max(0, site.ground() - origin.ground())) * 1.0;
+            }
+        } else {
+            score += Math.abs(dy) * 1.0;
+        }
+        score += Math.sqrt((double) dx * dx + (double) dz * dz) * 0.05;
+
+        double gap = worst == null ? 0
+                : distance(newX, newZ, worst.x(), worst.z()) - selfHalfSpan - worst.halfSpan();
+        double targetGap = worst == null ? 0 : targetGap(worst, selfHalfSpan);
+
+        return new Candidate(dx, dy, dz, score, violation, gap, targetGap,
+                worst == null ? null : worst.id(), fitProblem);
     }
 
-    /** The clear gap, edge to edge, that this conflict was asking for. */
-    private static double targetGap(Conflict conflict, int selfHalfSpan) {
-        return Math.max(0, conflict.required() - selfHalfSpan - conflict.halfSpan());
+    /**
+     * How far to shift vertically: follow the ground height difference, then - when fitting - lift
+     * far enough that the structure's base clears the highest ground under its new footprint.
+     */
+    private static int verticalFor(BoundingBox box, SiteCheck.Site origin, SiteCheck.Site site, boolean fit) {
+        int dy = 0;
+        if (SHConfig.followTerrainHeight.get()) dy = site.ground() - origin.ground();
+        if (fit && SHConfig.liftOutOfTerrain.get()) {
+            int need = (site.highest() + 1) - (box.minY() + dy);
+            if (need > 0) dy += need;
+        }
+        return dy;
     }
 
     private static Decision finish(ResourceLocation selfId, Decision decision) {
         switch (decision.outcome()) {
             case MOVED -> SHStats.moved(selfId);
+            case FITTED -> SHStats.fitted(selfId);
             case UNRESOLVED -> SHStats.unresolved(selfId);
             case CANCELLED -> SHStats.cancelled(selfId);
             default -> SHStats.placed(selfId);
         }
         if (decision.outcome() != Outcome.ALLOW) {
             SHStats.record(new SHStats.Event(selfId.toString(),
-                    decision.other() == null ? "?" : decision.other().toString(),
+                    decision.other() == null ? "-" : decision.other().toString(),
                     0, 0, decision.dx(), decision.dy(), decision.dz(),
                     decision.gap(), decision.targetGap(), decision.outcome().name()));
             if (SHConfig.logMoves.get()) {
@@ -246,6 +305,8 @@ public final class SpacingEngine {
         int spent = 0;
         int centreChunkX = centreX >> 4;
         int centreChunkZ = centreZ >> 4;
+
+        if (rules.pinned(selfHolder, selfId)) return conflicts;
 
         for (Neighbour n : view(ctx, rules).neighbours()) {
             if (spent >= budget) break;
@@ -289,6 +350,10 @@ public final class SpacingEngine {
             if (v > worstValue) { worstValue = v; worst = c; }
         }
         return worst;
+    }
+
+    private static double targetGap(Conflict conflict, int selfHalfSpan) {
+        return Math.max(0, conflict.required() - selfHalfSpan - conflict.halfSpan());
     }
 
     private static double distance(int ax, int az, int bx, int bz) {

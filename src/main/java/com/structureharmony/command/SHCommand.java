@@ -81,23 +81,26 @@ public final class SHCommand {
         List<Map.Entry<String, SHStats.Entry>> rows = new ArrayList<>(snapshot.entrySet());
         rows.sort((a, b) -> Integer.compare(b.getValue().attempts().get(), a.getValue().attempts().get()));
 
-        int moved = 0, unresolved = 0, cancelled = 0;
-        source.sendSuccess(() -> Component.literal("structure: attempts = placed + moved + unresolved"), false);
+        int moved = 0, fitted = 0, unresolved = 0, cancelled = 0;
+        source.sendSuccess(() -> Component.literal(
+                "structure: attempts = placed + moved + fitted + unresolved"), false);
         for (Map.Entry<String, SHStats.Entry> row : rows) {
             SHStats.Entry e = row.getValue();
             moved += e.moved().get();
+            fitted += e.fitted().get();
             unresolved += e.unresolved().get();
             cancelled += e.cancelled().get();
-            String line = String.format("%s: %d = %d + %d moved + %d unresolved%s",
-                    row.getKey(), e.attempts().get(), e.placed().get(), e.moved().get(), e.unresolved().get(),
+            String line = String.format("%s: %d = %d + %d moved + %d fitted + %d unresolved%s",
+                    row.getKey(), e.attempts().get(), e.placed().get(), e.moved().get(), e.fitted().get(),
+                    e.unresolved().get(),
                     e.cancelled().get() > 0 ? (" + " + e.cancelled().get() + " CANCELLED") : "");
             source.sendSuccess(() -> Component.literal(line), false);
         }
 
-        final int m = moved, u = unresolved, c = cancelled;
+        final int m = moved, f = fitted, u = unresolved, c = cancelled;
         source.sendSuccess(() -> Component.literal(String.format(
-                "totals: %d moved aside, %d could not be moved far enough (generated anyway), %d cancelled",
-                m, u, c)), false);
+                "totals: %d moved for spacing, %d adjusted to fit the ground, %d unresolved (generated anyway), %d cancelled",
+                m, f, u, c)), false);
         return rows.size();
     }
 

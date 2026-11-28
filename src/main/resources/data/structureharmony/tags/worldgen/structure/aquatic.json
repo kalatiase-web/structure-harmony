@@ -1,0 +1,11 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "minecraft:monument",          "required": false },
+    { "id": "minecraft:shipwreck",         "required": false },
+    { "id": "minecraft:ocean_ruin_cold",   "required": false },
+    { "id": "minecraft:ocean_ruin_warm",   "required": false },
+    { "id": "minecraft:buried_treasure",   "required": false },
+    { "id": "minecraft:ruined_portal_ocean", "required": false }
+  ]
+}

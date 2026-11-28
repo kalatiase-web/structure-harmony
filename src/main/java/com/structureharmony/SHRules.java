@@ -109,6 +109,9 @@ public final class SHRules {
         private final List<Rule> shift     = parseRules(SHConfig.maxShiftOverrides.get());
         private final List<Rule> ignored   = parseSelectors(SHConfig.ignored.get());
         private final List<Rule> pinned    = parseSelectors(SHConfig.pinned.get());
+        private final List<Rule> floating  = parseSelectors(SHConfig.floating.get());
+        private final List<Rule> aquatic   = parseSelectors(SHConfig.aquatic.get());
+        private final List<Rule> noFit     = parseSelectors(SHConfig.noFitCorrection.get());
         private final List<PairRule> pairs = parsePairs(SHConfig.pairOverrides.get());
 
         private final Map<String, Integer> radiusCache   = new ConcurrentHashMap<>();
