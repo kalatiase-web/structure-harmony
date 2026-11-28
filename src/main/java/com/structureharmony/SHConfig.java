@@ -49,6 +49,7 @@ public final class SHConfig {
     public static ForgeConfigSpec.IntValue maxRelief;
     public static ForgeConfigSpec.IntValue maxFitVerticalShift;
     public static ForgeConfigSpec.BooleanValue liftOutOfTerrain;
+    public static ForgeConfigSpec.IntValue maxLift;
     public static ForgeConfigSpec.BooleanValue preferHigherGround;
     public static ForgeConfigSpec.IntValue floatingDetectGap;
     public static ForgeConfigSpec.BooleanValue aquaticFromBiomes;
@@ -234,12 +235,20 @@ public final class SHConfig {
                                         "terrain after a sideways move).")
                                .defineInRange("maxFitVerticalShift", 48, 0, 256);
 
-        liftOutOfTerrain = b.comment("Raise a structure so its base clears the highest ground under its footprint. This is",
-                                     "what stops terrain cutting through the lower courses. The trade-off is that on very",
-                                     "uneven ground the low side can end up with a gap beneath it - with terrain blending",
-                                     "removed there is nothing to fill that in, so turn this off if you would rather have",
-                                     "buried walls than an overhang.")
+        liftOutOfTerrain = b.comment("Raise a structure slightly so its base clears the ground under its footprint, which",
+                                     "deals with minor terrain poking through the lower courses.",
+                                     "",
+                                     "Strictly limited by maxLift, and deliberately so: lifting a structure clear of the",
+                                     "HIGHEST ground beneath it guarantees nothing clips into it, by leaving it on a pedestal",
+                                     "with open air underneath. With terrain blending removed there is nothing to fill that",
+                                     "gap in, so a big lift just trades buried walls for a floating building. When a site",
+                                     "would need more lift than maxLift, it is treated as a bad site and somewhere flatter",
+                                     "is looked for instead.")
                             .define("liftOutOfTerrain", true);
+
+        maxLift = b.comment("Hard cap, in blocks, on that lift. Keep it small - a few blocks fixes a corner poking",
+                            "through, anything more means the site was wrong and the structure should move instead.")
+                   .defineInRange("maxLift", 4, 0, 32);
 
         preferHigherGround = b.comment("When several destinations are equally flat, prefer the higher one, so a structure",
                                        "displaced off a slope tends to end up on the shoulder or summit rather than the foot.")

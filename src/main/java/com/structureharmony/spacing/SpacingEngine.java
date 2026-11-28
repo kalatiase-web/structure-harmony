@@ -139,11 +139,14 @@ public final class SpacingEngine {
             return new Decision(outcome, null, 0, 0, 0, 0, 0);
         }
         Outcome outcome;
-        if (best.violation() > 0 || best.fitProblem()) {
-            outcome = SHConfig.cancelWhenCannotMove.get() && best.violation() > 0
-                    ? Outcome.CANCELLED : Outcome.UNRESOLVED;
+        if (best.violation() > 0) {
+            outcome = SHConfig.cancelWhenCannotMove.get() ? Outcome.CANCELLED : Outcome.UNRESOLVED;
+        } else if (fitOnly) {
+            // No conflict was involved, so this is a fit adjustment whether or not the ground
+            // turned out to be perfect. UNRESOLVED is reserved for separation that fell short.
+            outcome = best.moved() ? Outcome.FITTED : Outcome.ALLOW;
         } else {
-            outcome = fitOnly ? Outcome.FITTED : Outcome.MOVED;
+            outcome = Outcome.MOVED;
         }
         return new Decision(outcome, best.other(), best.dx(), best.dy(), best.dz(),
                 best.gap(), best.targetGap());
@@ -220,8 +223,13 @@ public final class SpacingEngine {
         int newZ = centreZ + dz;
 
         int dy = 0;
+        int excessLift = 0;
         if (site != null && origin != null) {
-            dy = verticalFor(box, origin, site, fit);
+            int follow = followShift(origin, site);
+            int wanted = fit ? liftNeeded(box, site, follow) : 0;
+            int lift = Math.min(SHConfig.maxLift.get(), wanted);
+            excessLift = wanted - lift;
+            dy = follow + lift;
             int cap = fit ? SHConfig.maxFitVerticalShift.get() : SHConfig.maxVerticalShift.get();
             if (Math.abs(dy) > cap) return null;
         }
@@ -239,6 +247,9 @@ public final class SpacingEngine {
             }
             int over = site.relief() - SHConfig.maxRelief.get();
             if (over > 0) { score += over * 200.0; fitProblem = true; }
+            // Needing more lift than we are willing to apply means this site does not fit; say so
+            // rather than leaving the structure part-buried and calling it done.
+            if (excessLift > 0) { score += excessLift * 200.0; fitProblem = true; }
             score += site.relief() * 2.0;          // mild preference for flatter ground generally
             score += Math.abs(dy) * 2.0;
             if (SHConfig.preferHigherGround.get() && origin != null) {
@@ -258,18 +269,25 @@ public final class SpacingEngine {
                 worst == null ? null : worst.id(), fitProblem);
     }
 
+    /** Vertical shift from following the ground height between the two sites. */
+    private static int followShift(SiteCheck.Site origin, SiteCheck.Site site) {
+        return SHConfig.followTerrainHeight.get() ? site.ground() - origin.ground() : 0;
+    }
+
     /**
-     * How far to shift vertically: follow the ground height difference, then - when fitting - lift
-     * far enough that the structure's base clears the highest ground under its new footprint.
+     * How much lift this site would need for the structure's base to clear the highest ground
+     * under it. Returned raw, un-capped, so the caller can treat "needs a lot" as evidence that
+     * the site is wrong rather than quietly building a pedestal.
      */
+    private static int liftNeeded(BoundingBox box, SiteCheck.Site site, int followShift) {
+        if (!SHConfig.liftOutOfTerrain.get()) return 0;
+        return Math.max(0, (site.highest() + 1) - (box.minY() + followShift));
+    }
+
     private static int verticalFor(BoundingBox box, SiteCheck.Site origin, SiteCheck.Site site, boolean fit) {
-        int dy = 0;
-        if (SHConfig.followTerrainHeight.get()) dy = site.ground() - origin.ground();
-        if (fit && SHConfig.liftOutOfTerrain.get()) {
-            int need = (site.highest() + 1) - (box.minY() + dy);
-            if (need > 0) dy += need;
-        }
-        return dy;
+        int follow = followShift(origin, site);
+        if (!fit) return follow;
+        return follow + Math.min(SHConfig.maxLift.get(), liftNeeded(box, site, follow));
     }
 
     private static Decision finish(ResourceLocation selfId, Decision decision) {
@@ -286,10 +304,15 @@ public final class SpacingEngine {
                     0, 0, decision.dx(), decision.dy(), decision.dz(),
                     decision.gap(), decision.targetGap(), decision.outcome().name()));
             if (SHConfig.logMoves.get()) {
-                StructureHarmony.LOG.info("[StructureHarmony] {} vs {}: {} by ({},{},{}) -> {} block gap (wanted {})",
-                        selfId, decision.other(), decision.outcome(),
-                        decision.dx(), decision.dy(), decision.dz(),
-                        String.format("%.0f", decision.gap()), String.format("%.0f", decision.targetGap()));
+                if (decision.other() == null) {
+                    StructureHarmony.LOG.info("[StructureHarmony] {}: {} to fit the ground, shifted ({},{},{})",
+                            selfId, decision.outcome(), decision.dx(), decision.dy(), decision.dz());
+                } else {
+                    StructureHarmony.LOG.info("[StructureHarmony] {} vs {}: {} by ({},{},{}) -> {} block gap (wanted {})",
+                            selfId, decision.other(), decision.outcome(),
+                            decision.dx(), decision.dy(), decision.dz(),
+                            String.format("%.0f", decision.gap()), String.format("%.0f", decision.targetGap()));
+                }
             }
         }
         return decision;

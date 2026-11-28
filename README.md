@@ -179,10 +179,12 @@ Spacing and fit are scored together rather than in sequence, because they compet
 spot nearby may be the one closest to a village.
 
 - `[fit] maxRelief = 8` — ground spread across the footprint above which a site is "too uneven".
-- `liftOutOfTerrain = true` — raise a structure until its base clears the highest ground beneath
-  it. This is the main defence against terrain cutting through walls now that blending is gone.
-  The trade-off is a possible gap under the low side, with nothing to fill it — turn it off if you
-  would rather have buried walls than an overhang.
+- `liftOutOfTerrain = true`, `maxLift = 4` — raise a structure a few blocks so its base clears
+  the ground, which handles a corner poking through the lower courses. The cap is small on
+  purpose: lifting clear of the *highest* ground beneath a structure does guarantee nothing clips
+  into it, by standing it on a pedestal with open air underneath, and with blending removed there
+  is nothing to fill that in. A site needing more lift than `maxLift` is treated as a bad site, so
+  somewhere flatter is looked for instead of quietly building the pedestal.
 - `preferHigherGround = true` — bounded tiebreak toward higher ground, never the dominant term.
 - `keepLandStructuresOutOfWater = true` — a non-aquatic structure in water is moved to land.
 
