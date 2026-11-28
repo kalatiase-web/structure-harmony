@@ -154,6 +154,23 @@ public final class SHRules {
             return v;
         }
 
+        /** Meant to hang in the air: exempt from every ground fit check. */
+        public boolean floating(@Nullable Holder<Structure> holder, ResourceLocation id) {
+            if (holder != null && holder.is(SHTags.FLOATING)) return true;
+            return matchesAny(floating, holder, id);
+        }
+
+        /** Meant to be in water: never pulled onto land. */
+        public boolean aquaticListed(@Nullable Holder<Structure> holder, ResourceLocation id) {
+            if (holder != null && holder.is(SHTags.AQUATIC)) return true;
+            return matchesAny(aquatic, holder, id);
+        }
+
+        /** Excluded from ground fit checking entirely. */
+        public boolean noFit(@Nullable Holder<Structure> holder, ResourceLocation id) {
+            return matchesAny(noFit, holder, id);
+        }
+
         /** Largest displacement in blocks this structure is allowed, before engine limits. */
         public int maxShift(@Nullable Holder<Structure> holder, ResourceLocation id) {
             return Math.max(0, resolve(shift, holder, id, SHConfig.maxShift.get()));
